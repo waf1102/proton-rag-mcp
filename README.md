@@ -72,6 +72,42 @@ Wait for AnythingLLM at `http://127.0.0.1:3001`. Use `docker logs proton-rag-any
 </details>
 
 <details>
+<summary><strong>Docker Compose setup</strong></summary>
+
+Use Docker with the Compose plugin and the checked-in [`deploy/compose.yaml`](deploy/compose.yaml). Choose this **instead of** the standalone Docker commands above; both use the same container names and persistent volumes. Compose configuration is validated, but Docker deployment has not been exercised.
+
+From the checkout, create the private configuration file if it does not already exist:
+
+```sh
+umask 077
+mkdir -p "$HOME/.config/proton-rag"
+if [ ! -e "$HOME/.config/proton-rag/anything.env" ]; then
+  printf 'AUTH_TOKEN=%s\nJWT_SECRET=%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" \
+    > "$HOME/.config/proton-rag/anything.env"
+fi
+```
+
+Start Ollama, download the embedding model, then start AnythingLLM:
+
+```sh
+docker compose -f deploy/compose.yaml up -d --wait ollama
+docker compose -f deploy/compose.yaml exec ollama ollama pull nomic-embed-text
+docker compose -f deploy/compose.yaml up -d --wait
+```
+
+Open `http://127.0.0.1:3001`, then continue with **Index sample mail** below. The Python daemon and MCP server still run on the host.
+
+```sh
+docker compose -f deploy/compose.yaml ps
+docker compose -f deploy/compose.yaml logs -f anythingllm
+docker compose -f deploy/compose.yaml down
+```
+
+`down` preserves the named volumes. Adding `--volumes` deletes the stored index and embedding model.
+
+</details>
+
+<details>
 <summary><strong>Podman setup (tested deployment)</strong></summary>
 
 Use rootless Podman with Quadlet and a working user systemd manager. Create the private AnythingLLM configuration:

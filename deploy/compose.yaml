@@ -1,0 +1,63 @@
+name: proton-rag
+
+services:
+  ollama:
+    image: ollama/ollama@sha256:6697852aa235e8fb4e1e77cfab9bbf70d51d3760cb0d266e9fb43cf2b8e44f66
+    container_name: proton-rag-ollama
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    environment:
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_KEEP_ALIVE: 2m
+    mem_limit: 1000m
+    cpus: 1
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 5
+
+  anythingllm:
+    image: mintplexlabs/anythingllm@sha256:5ce7b65badd7de94827846d33fe1b38eff71f86875b7ce88d6e56d2371ec2d6b
+    container_name: proton-rag-anything
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3001:3001"
+    volumes:
+      - anything:/app/server/storage
+    env_file:
+      - ${HOME}/.config/proton-rag/anything.env
+    environment:
+      STORAGE_DIR: /app/server/storage
+      SERVER_PORT: "3001"
+      DISABLE_TELEMETRY: "true"
+      LLM_PROVIDER: ollama
+      OLLAMA_BASE_PATH: http://ollama:11434
+      OLLAMA_MODEL_PREF: nomic-embed-text
+      EMBEDDING_ENGINE: ollama
+      EMBEDDING_BASE_PATH: http://ollama:11434
+      EMBEDDING_MODEL_PREF: nomic-embed-text
+      EMBEDDING_MODEL_MAX_CHUNK_LENGTH: "2048"
+      VECTOR_DB: lancedb
+    mem_limit: 1200m
+    cpus: 1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:3001/api/ping"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 5
+
+volumes:
+  ollama:
+    name: proton-rag-ollama
+  anything:
+    name: proton-rag-anything
