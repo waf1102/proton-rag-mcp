@@ -8,10 +8,11 @@ import zipfile
 from email import policy
 from email.parser import BytesParser
 from html.parser import HTMLParser
+from .config import Settings
 
-MAX_RAW = 8 * 1024 * 1024
-MAX_TEXT = 80_000
-MAX_PARTS = 100
+MAX_RAW = Settings().max_message_bytes
+MAX_TEXT = Settings().max_text_chars
+MAX_PARTS = Settings().max_parts
 
 
 class HTMLText(HTMLParser):
@@ -33,13 +34,14 @@ class HTMLText(HTMLParser):
             self.parts.append(data)
 
 
-def parse(raw):
-    if len(raw) > MAX_RAW:
+def parse(raw, settings=None):
+    settings = settings or Settings()
+    if len(raw) > settings.max_message_bytes:
         return {"text": "", "skipped": ["message_size"]}
     msg = BytesParser(policy=policy.default).parsebytes(raw)
     texts, skipped = [], []
     parts = list(msg.walk())
-    if len(parts) > MAX_PARTS:
+    if len(parts) > settings.max_parts:
         return {"text": "", "skipped": ["part_count"]}
     for part in parts:
         if part.is_multipart():
@@ -74,15 +76,33 @@ def parse(raw):
             else:
                 skipped.append("unsupported")
                 continue
-            texts.append(text[:MAX_TEXT])
+            texts.append(text[: settings.max_text_chars])
         except Exception:
             skipped.append("malformed_attachment")
     if msg.defects:
         skipped.append("mime_defects")
-    return {"text": "\n\n".join(texts)[:MAX_TEXT].strip(), "skipped": skipped}
+    metadata = {
+        name: str(msg.get(header, ""))
+        for name, header in [
+            ("subject", "Subject"),
+            ("sender", "From"),
+            ("recipients", "To"),
+            ("cc", "Cc"),
+            ("date", "Date"),
+            ("message_id", "Message-ID"),
+        ]
+    }
+    metadata["attachments"] = [str(p.get_filename()) for p in parts if p.get_filename()]
+    body = "\n\n".join(texts)[: settings.max_text_chars].strip()
+    headers = "\n".join(f"{k}: {v}" for k, v in metadata.items() if v)
+    return {
+        "text": (headers + "\n\n" + body).strip() if body else "",
+        "metadata": metadata,
+        "skipped": skipped,
+    }
 
 
-def _worker(raw, pipe):
+def _worker(raw, pipe, settings):
     try:
         # Third-party parsers must not put private document fragments in diagnostics.
         sink = os.open(os.devnull, os.O_WRONLY)
@@ -91,17 +111,19 @@ def _worker(raw, pipe):
         os.close(sink)
         resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024,) * 2)
         resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
-        pipe.send(parse(raw))
+        pipe.send(parse(raw, settings))
     except BaseException:
         pipe.send({"text": "", "skipped": ["parse_failed"]})
     finally:
         pipe.close()
 
 
-def extract(raw, timeout=8):
+def extract(raw, timeout=None, settings=None):
+    settings = settings or Settings()
+    timeout = timeout or settings.parser_timeout
     ctx = multiprocessing.get_context("spawn")
     receive, send = ctx.Pipe(duplex=False)
-    process = ctx.Process(target=_worker, args=(raw, send), daemon=True)
+    process = ctx.Process(target=_worker, args=(raw, send, settings), daemon=True)
     process.start()
     send.close()
     try:

@@ -9,7 +9,16 @@ from proton_rag.mcp_server import build
 class Catalog:
     def rows(self):
         return {
-            "fixture": {"active": 1, "validity": "1", "uid": "7", "digest": "abc", "synthetic": 1}
+            "fixture": {
+                "active": 1,
+                "validity": "1",
+                "uid": "7",
+                "digest": "abc",
+                "synthetic": 1,
+                "folder": "INBOX",
+                "key": "fixture",
+                "metadata": "{}",
+            }
         }
 
 

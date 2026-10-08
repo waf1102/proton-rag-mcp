@@ -23,8 +23,7 @@ async def test_python_sdk_client():
             result = await client.call_tool("search_mail", {"query": "When does cobalt arrive?"})
             assert not result.isError
             assert (
-                "Tuesday" in result.content[0].text
-                and "imap://Folders/test/" in result.content[0].text
+                "Tuesday" in result.content[0].text and "imap:///INBOX/" in result.content[0].text
             )
             bad = await client.call_tool("search_mail", {"query": "", "limit": 99})
             assert bad.isError
@@ -67,7 +66,7 @@ async def test_raw_protocol_harness_negotiation_errors_cancellation(tmp_path):
         await send("notifications/initialized")
         await send("tools/list", ident=2)
         tools = (await receive())["result"]["tools"]
-        assert tools[0]["inputSchema"]["properties"]["limit"]["maximum"] == 5
+        assert tools[0]["inputSchema"]["properties"]["limit"]["maximum"] == 50
         await send("tools/call", {"name": "search_mail", "arguments": {"query": "cancel-me"}}, 3)
         await asyncio.sleep(0.05)
         await send("notifications/cancelled", {"requestId": 3, "reason": "fixture"})
@@ -83,3 +82,49 @@ async def test_raw_protocol_harness_negotiation_errors_cancellation(tmp_path):
     finally:
         p.stdin.close()
         await asyncio.wait_for(p.wait(), 5)
+
+
+async def test_real_mail_search_deduplicates_and_preserves_locations():
+    from proton_rag.mcp_server import search
+    from proton_rag.config import Settings
+
+    class Catalog:
+        def rows(self):
+            return {
+                key: {
+                    "key": key,
+                    "active": 1,
+                    "folder": folder,
+                    "validity": "1",
+                    "uid": "7",
+                    "digest": "abc",
+                    "metadata": json.dumps(
+                        {
+                            "message_id": "<same>",
+                            "subject": "Receipt",
+                            "sender": "sender@example.test",
+                        }
+                    ),
+                }
+                for key, folder in [("a", "INBOX"), ("b", "Folders/旅行")]
+            }
+
+    class Backend:
+        async def search(self, query, limit):
+            return [{"text": "x" * 5000, "metadata": {"docSource": key}} for key in ["a", "b"]]
+
+    hits = await search(Catalog(), Backend(), "receipt", 10, Settings())
+    assert len(hits) == 1 and len(hits[0]["text"]) == 4000
+    assert len(hits[0]["locations"]) == 2
+    assert "%E6%97%85" in hits[0]["locations"][1]["citation"]
+    assert hits[0]["metadata"]["subject"] == "Receipt"
+
+
+async def test_answer_tool_available_with_key_without_ledger():
+    from proton_rag.mcp_server import build
+    from unittest.mock import Mock
+
+    server = build(Mock(), Mock(), api_key="fixture")
+    tools = await server.list_tools()
+    assert {t.name for t in tools} == {"search_mail", "answer_mail"}
+    assert "private email" in next(t.description for t in tools if t.name == "answer_mail")

@@ -12,7 +12,7 @@ async def run():
     env = {
         k: v
         for k, v in os.environ.items()
-        if k in ("PATH", "RAG_STATE_DIR", "ANYTHING_URL", "ANYTHING_API_KEY")
+        if k in ("PATH", "RAG_STATE_DIR", "ANYTHING_URL", "ANYTHING_API_KEY", "ANYTHING_WORKSPACE")
     }
     async with stdio_client(
         StdioServerParameters(command=sys.executable, args=["-m", "proton_rag.mcp_server"], env=env)
@@ -21,9 +21,14 @@ async def run():
             init = await client.initialize()
             tools = await client.list_tools()
             assert [t.name for t in tools.tools] == ["search_mail"]
-            result = await client.call_tool("search_mail", {"query": "When does cobalt arrive?"})
-            assert not result.isError and "Tuesday" in result.content[0].text
-            assert "imap://Folders/test/" in result.content[0].text
+            result = await client.call_tool(
+                "search_mail",
+                {"query": os.environ.get("RAG_INTEROP_QUERY", "When does cobalt arrive?")},
+            )
+            assert not result.isError
+            if not os.environ.get("RAG_INTEROP_QUERY"):
+                assert "Tuesday" in result.content[0].text
+            assert "imap:///" in result.content[0].text
             print(
                 json.dumps(
                     {

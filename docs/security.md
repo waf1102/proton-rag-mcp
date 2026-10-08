@@ -1,43 +1,15 @@
-# Boundaries and persistence
+# Security and data paths
 
-## Mail and data paths
+The IMAP adapter uses read-only folder selection and `BODY.PEEK[]`. It has no message copy, move, flag-change, delete, or expunge operations. All selectable folders are included unless configured otherwise.
 
-No mailbox mutation API exists. Only exact `Folders/test` can be selected by the ingestion adapter. No INBOX access/copy or live mail test was performed. Live copy remains deferred because source preservation and privacy permission have not been demonstrated. The original owner's daemon file is untouched; its unsafe default fetch/logging behavior is replaced by the new owned service.
+Bridge transport validates the certificate chain and hostname. Trust the certificate obtained from your controlled Bridge installation; do not disable verification. IMAP and application credentials stay in private runtime configuration and out of logs.
 
-MIME bytes and attachments enter an isolated parser in memory. External parsing libraries cannot write to stdout/stderr. Text, PDF, DOCX and CSV are supported with bounds; images, archives, executables and unsupported MIME types are skipped. No OCR, external links, macros, embedded scripts or attachment execution occurs. No raw private `.eml`, PDF or DOCX staging is required. Synthetic fixtures intentionally persist as `.eml` test data.
+MIME bodies and supported attachments are parsed in memory in a disposable worker. Images, executables and archives are not executed. Workers have CPU, memory, time, MIME-part, and document-expansion bounds. Raw private messages are not staged in files by the application.
 
-AnythingLLM's supported `/api/v1/document/raw-text` API persists the processed text as document JSON. It also writes vector caches, LanceDB and SQLite. This is **not** memory-only end-to-end storage. Actual API behavior was validated on installed 1.17.0, rather than inferred from arbitrary JSON chunks. Stable titles/docSource IDs combine UIDVALIDITY, UID and content SHA256. The intent journal precedes upload; repeated ingestion recovers stored documents by that identity. Removing a message hides its citation, removes workspace embeddings, calls `system/remove-documents` to purge source/cache, and removes the mapping. This is logical deletion, not forensic erasure from storage snapshots or old SQLite pages.
+AnythingLLM persists extracted text, metadata, vector caches and its database. This is not memory-only storage. Protect its volume, the catalog, swap and backups according to your threat model. Rootless containers and local paths do not themselves provide encryption at rest. The application does not configure host disk encryption.
 
-| Data | Persistent location |
-|---|---|
-| Existing Bridge account/session/mail cache | existing `proton-bridge-data` rootless volume; untouched |
-| AnythingLLM extracted text | `proton-rag-anything` volume, `/app/server/storage/documents` |
-| Embeddings and local index | same volume, `vector-cache`, `lancedb` |
-| AnythingLLM metadata/API keys | same volume, `anythingllm.db` and application settings |
-| Embedding model | `proton-rag-ollama` volume, `/root/.ollama` |
-| Daemon identities and spend reservations | `~/.local/share/proton-rag/catalog.db`, `budget.db` |
-| Synthetic fixtures | `~/.local/share/proton-rag/fixtures` |
-| Runtime secrets | mode-0600 `~/.config/proton-rag/*.env`; secret proposals registered |
-| Diagnostics | user journal, Podman/application logs; daemon excludes mail and credentials |
-| Backups | none created or configured by this task; existing host backup policy unverified |
+Search and embeddings stay local. `answer_mail` sends the user's question and selected excerpts to OpenRouter and its model provider. It requests providers that deny data collection, but that routing setting is not an independent retention guarantee. Returned mail content is untrusted data; generation has no action tools. MCP clients may apply their own model and data policies to retrieved content.
 
-Host block inspection showed ext4 on `/dev/vda1` and a swap partition, with no visible LUKS device. Host/provider encryption is **unverified**, not guaranteed; swap may contain process memory. No storage/unlock changes were authorized. Keep private ingestion disabled pending appropriate controls. Container root is namespaced under a rootless account, not host root.
+Mailbox folder names are encoded in citations alongside UIDVALIDITY, UID and a content digest. Citations identify source messages; they do not grant mailbox access. Search results also expose sender, recipients, subject, date and attachment names to the connected client.
 
-## Outbound paths
-
-Local ingestion calls AnythingLLM over loopback; AnythingLLM requests local Ollama embeddings over the rootless network. MCP local search invokes only the vector-search route. No generation model is installed and AnythingLLM has no cloud key. Telemetry is disabled for the AnythingLLM instance. Image/model installation required external registries; future upgrades would too.
-
-Optional `answer_synthetic` fetches public model pricing and sends a bounded query plus at most three 2000-character synthetic excerpts to `openrouter.ai`. Provider routing requests `data_collection=deny`; this is a routing constraint, not a verified zero-retention guarantee. The client receives an explicit cloud-tool description. Prompt-injection defenses treat retrieved content as untrusted data and expose no downstream action tools. These controls cannot guarantee the model ignores every malicious instruction; they bound the consequences and external payload.
-
-Clients receive email excerpts by design. Only authorized local clients should receive the AnythingLLM key and filesystem access. Stdio inherits the launching user's privileges and has no additional authentication. Host loopback is not an isolation boundary between hostile local users. Do not expose these ports through a proxy without separately designing authentication.
-
-## Sources used to verify integration
-
-- [AnythingLLM raw-text and document endpoints](https://github.com/Mintplex-Labs/anything-llm/blob/master/server/endpoints/api/document/index.js)
-- [AnythingLLM workspace embeddings and vector-search](https://github.com/Mintplex-Labs/anything-llm/blob/master/server/endpoints/api/workspace/index.js)
-- [AnythingLLM source/cache/vector purge](https://github.com/Mintplex-Labs/anything-llm/blob/master/server/utils/files/purgeDocument.js)
-- [Official MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
-- [Ollama embeddings](https://github.com/ollama/ollama/blob/main/docs/capabilities/embeddings.mdx)
-- [OpenRouter provider routing](https://openrouter.ai/docs/guides/routing/provider-selection)
-
-The installed-image API tests are the acceptance evidence; mutable upstream source links explain the chosen interfaces.
+Application services bind to host loopback. MCP uses stdio and has no unauthenticated HTTP listener. Logical index deletion removes matching document/vector data; it does not promise forensic erasure from snapshots, backups or old storage pages.

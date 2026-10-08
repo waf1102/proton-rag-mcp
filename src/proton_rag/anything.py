@@ -4,7 +4,7 @@ import re
 from urllib.parse import urlsplit
 import httpx
 
-KEY = re.compile(r"^proton-test-\d+-\d+-[a-f0-9]{64}$")
+KEY = re.compile(r"^proton-mail-[a-f0-9]{64}$")
 
 
 def local_url(url):
@@ -17,12 +17,13 @@ def local_url(url):
 
 
 class Anything:
-    def __init__(self, url, key, workspace="proton-test"):
-        if workspace != "proton-test":
-            raise ValueError("Dedicated proton-test workspace required")
+    def __init__(self, url, key, workspace="proton-mail"):
+        if not re.fullmatch(r"[a-zA-Z0-9_-]+", workspace):
+            raise ValueError("Invalid workspace slug")
         self.url = local_url(url) + "/api/v1"
         self.workspace = workspace
         self.headers = {"Authorization": f"Bearer {key}"}
+        self._documents = None
 
     def request(self, method, path, data=None):
         try:
@@ -39,33 +40,41 @@ class Anything:
     def find(self, key):
         if not KEY.fullmatch(key):
             raise ValueError("Invalid document identity")
-        tree = self.request("GET", "/documents")["localFiles"]
-        found = []
+        if self._documents is None:
+            tree = self.request("GET", "/documents")["localFiles"]
+            documents = {}
 
-        def walk(node, parent=""):
-            if node.get("type") == "folder":
-                folder = "" if node["name"] == "documents" else parent + node["name"] + "/"
-                for child in node.get("items", []):
-                    walk(child, folder)
-            elif node.get("title") == key:
-                found.append(parent + node["name"])
+            def walk(node, parent=""):
+                if node.get("type") == "folder":
+                    folder = "" if node["name"] == "documents" else parent + node["name"] + "/"
+                    for child in node.get("items", []):
+                        walk(child, folder)
+                elif KEY.fullmatch(node.get("title", "")):
+                    documents.setdefault(node["title"], []).append(parent + node["name"])
 
-        walk(tree)
-        return found
+            walk(tree)
+            self._documents = documents
+        return list(self._documents.get(key, []))
 
-    def recover(self, key, text):
+    def refresh(self):
+        self._documents = None
+
+    def recover(self, key, text, before_upload=None):
         # No server idempotency token exists for raw-text. Never blindly replay an
         # ambiguous upload: a timed-out collector may still commit it later.
+        self.refresh()
         if not self.find(key):
             raise RuntimeError("Pending upload requires reconciliation")
-        return self.ensure(key, text)
+        return self.ensure(key, text, before_upload=before_upload)
 
-    def ensure(self, key, text):
+    def ensure(self, key, text, before_upload=None):
         paths = self.find(key)  # Recover upload committed before crash/lost response.
         if len(paths) > 1:
             self.remove(paths[1:])
             paths = paths[:1]
         if not paths:
+            if before_upload:
+                before_upload()
             result = self.request(
                 "POST",
                 "/document/raw-text",
@@ -81,6 +90,8 @@ class Anything:
             paths = [d["location"] for d in result["documents"]]
             if len(paths) != 1:
                 raise RuntimeError("Unexpected ingestion result")
+        if self._documents is not None:
+            self._documents[key] = paths
         # AnythingLLM skips existing workspace document mappings on repeated adds.
         self.request(
             "POST", f"/workspace/{self.workspace}/update-embeddings", {"adds": paths, "deletes": []}
@@ -98,6 +109,9 @@ class Anything:
                 {"adds": [], "deletes": paths},
             )
             self.request("DELETE", "/system/remove-documents", {"names": paths})
+            if self._documents is not None:
+                for key in self._documents:
+                    self._documents[key] = [p for p in self._documents[key] if p not in paths]
 
     async def search(self, query, limit):
         try:

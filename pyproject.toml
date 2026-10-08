@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "proton-rag-mcp"
 version = "0.1.0"
-description = "Test-folder-only Proton mail retrieval with local indexing and read-only MCP"
+description = "Proton Mail retrieval with local indexing, cited answers and read-only MCP"
 requires-python = ">=3.11"
 dependencies = ["mcp>=1.26,<2", "httpx>=0.28,<1", "pypdf>=6,<7", "python-docx>=1.2,<2"]
 

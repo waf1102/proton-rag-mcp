@@ -1,3 +1,5 @@
+"""Incremental read-only synchronization of configured mail folders."""
+
 import argparse
 import fcntl
 import json
@@ -7,49 +9,76 @@ import signal
 import threading
 from pathlib import Path
 from .anything import Anything
-from .mailbox import Snapshot, TestMailbox
-from .sync import Catalog, synchronize
+from .config import Settings
+from .mailbox import Mailbox, Snapshot
+from .sync import Catalog, synchronize, synchronize_folder
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--synthetic-dir", type=Path)
+    parser.add_argument(
+        "--synthetic-dir", type=Path, help="Use isolated .eml fixtures instead of IMAP"
+    )
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
     os.umask(0o077)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    state = Path(os.environ["RAG_STATE_DIR"])
-    state.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with (state / "daemon.lock").open("a") as lock:
+    settings = Settings.from_env()
+    settings.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with (settings.state_dir / "daemon.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         stop = threading.Event()
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, lambda *_: stop.set())
         backend = Anything(
-            os.environ.get("ANYTHING_URL", "http://127.0.0.1:3001"), os.environ["ANYTHING_API_KEY"]
+            settings.anything_url, os.environ["ANYTHING_API_KEY"], settings.workspace
         )
-        catalog = Catalog(state / "catalog.db")
+        catalog = Catalog(settings.state_dir / "catalog.db")
         backoff = 2
         while not stop.is_set():
             mailbox = None
+            failed = False
             try:
+                backend.refresh()
                 if args.synthetic_dir:
-                    # Fixture directory must be explicitly selected, never infer synthetic from mail headers.
                     files = sorted(args.synthetic_dir.glob("*.eml"))
-                    snapshot = Snapshot("1", {p.stem: p.read_bytes() for p in files})
-                else:
-                    if os.environ.get("RAG_ENABLE_PRIVATE_INGESTION") != "1":
-                        raise RuntimeError("Live ingestion disabled")
-                    mailbox = TestMailbox.connect(
-                        os.environ["IMAP_USER"], os.environ["IMAP_PASS"], os.environ["IMAP_CA_FILE"]
+                    result = synchronize(
+                        catalog,
+                        backend,
+                        Snapshot("1", {p.stem: p.read_bytes() for p in files}, folder="fixtures"),
+                        synthetic=True,
                     )
-                    snapshot = mailbox.snapshot()
-                result = synchronize(catalog, backend, snapshot, synthetic=bool(args.synthetic_dir))
-                logging.info(json.dumps({"event": "sync_ok", **result}))
-                backoff = 2
+                    logging.info(json.dumps({"event": "sync_ok", **result}))
+                else:
+                    mailbox = Mailbox.connect(
+                        os.environ["IMAP_USER"],
+                        os.environ["IMAP_PASS"],
+                        os.environ.get("IMAP_CA_FILE"),
+                        settings.imap_host,
+                        settings.imap_port,
+                        settings.max_message_bytes,
+                    )
+                    available = mailbox.folders()
+                    folders = list(settings.folders) if settings.folders else available
+                    folders = [f for f in folders if f not in settings.excluded_folders]
+                    for folder in folders:
+                        if stop.is_set():
+                            break
+                        try:
+                            if folder not in available:
+                                raise ValueError("Configured folder unavailable")
+                            result = synchronize_folder(
+                                catalog, backend, mailbox, folder, settings, stop
+                            )
+                            logging.info(json.dumps({"event": "folder_sync_ok", **result}))
+                        except Exception:
+                            failed = True
+                            logging.warning(json.dumps({"event": "folder_sync_failed"}))
+                    # Missing folders retain their catalog until an operator explicitly reindexes.
                 if args.once:
-                    return
-                stop.wait(30)
+                    raise SystemExit(1 if failed else 0)
+                backoff = min(backoff * 2, 60) if failed else settings.poll_seconds
+                stop.wait(backoff)
             except Exception:
                 logging.warning(json.dumps({"event": "sync_failed", "retry_seconds": backoff}))
                 if args.once:
