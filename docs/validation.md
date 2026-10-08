@@ -39,16 +39,16 @@ Both application host listeners were verified at **127.0.0.1** only (3001 and 11
 
 ## Delivery blocker
 
-The authorized gateway rejected `git push -u origin contractor/FLO-38-proton-rag` with HTTP 403 (repository write permission denied). Fetch access worked. No PR was opened, no alternative identity was used, and no merge/release occurred. Source and this report are uploaded to Paperclip for review while Contractor coordinates access restoration.
+The authorized gateway still rejected branch push with HTTP 403 on the 09:33 UTC continuation. The saved origin is SSH, but run-injected `url.https://github.com/.insteadof` rules rewrite SSH to HTTPS. The installed Paperclip GitHub connection independently rejected branch creation with `403 Resource not accessible by integration`. Remote branch listing contains only main. No PR, alternate identity, merge or release. Gateway write access remains the delivery blocker.
 
 ## Explicit gaps
 
-- **Paid OpenRouter smoke test and provider-side cap verification:** unavailable authorized key. Checked both designated source documents and granted-secret metadata; no OpenRouter credential found. Connection catalog returned no OpenRouter service. Actual paid calls and billed usage: **zero**. Generation/budget behavior is fixture-tested, not billed-provider-tested.
+- **Paid OpenRouter smoke test:** passed on the 09:33 UTC continuation using the granted secret API without exposing or persisting the key. One synthetic cobalt query returned Tuesday and the correct synthetic citation using `openai/gpt-4.1-mini`. Provider-reported usage cost: **$0.000064**; shared persistent ledger conservative debit: **$0.013234**, below $5/day. Live model pricing passed the implementation ceilings ($1/M input, $4/M output). The key metadata returned `limit`, `limit_reset`, and `limit_remaining` as null: no provider-side key cap is configured. Application accounting does not cover other users of this key; invoice reconciliation remains unverified.
 - **Live mailbox/usefulness/copy tests:** deferred under the privacy restriction. Copy functionality is deliberately absent; source preservation is not claimed proven. Private ingestion remains disabled.
 - **Encryption:** ext4 root and swap observed, no visible LUKS layer. Host/provider encryption, backup and secure-erasure behavior are not verified. No host storage changes made.
 - **Branch protections:** gateway fetch worked; reading `branches/main/protection` returned HTTP 403. Required remote check policy cannot be asserted. The local implementation includes a synthetic CI job; local checks are reported independently.
 - **Boot/unlock:** application lifecycle and user-unit configuration validated; actual reboot, linger/unlock behavior and Fedora deployment untested.
 - **Ambiguous uploads:** no blind retry when no stable-title match can be found; this narrow crash/timeout window requires reconciliation rather than duplicate creation.
-- **Credential handling incident:** the legacy daemon's embedded Bridge credential appeared in inspection tool output due to incomplete redaction. It is excluded from repository/evidence. A secure-secret proposal was registered; Bridge rotation/configuration was not performed because it is outside this task's authority. Contractor/owner must decide the response through the existing secure setup.
+- **Credential handling incident:** the legacy daemon's embedded Bridge credential appeared in inspection tool output due to incomplete redaction. It is excluded from repository/evidence. A secure-secret proposal was registered; Bridge rotation/configuration was not performed because it is outside this task's authority. The owner explicitly directed continuation without treating this incident as a blocker; Bridge setup remains unchanged.
 
 This is reviewable implementation evidence, not a claim that the outstanding private-data, provider or host controls are complete. No merge or release was performed.
