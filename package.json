@@ -1,0 +1,7 @@
+{
+  "name": "proton-rag-mcp-interop",
+  "private": true,
+  "type": "module",
+  "scripts": {"test:interop": "node scripts/client-js.mjs"},
+  "devDependencies": {"@modelcontextprotocol/sdk": "^1.26.0"}
+}

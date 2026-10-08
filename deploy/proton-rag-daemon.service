@@ -1,0 +1,23 @@
+[Unit]
+Description=Proton test-folder RAG daemon (synthetic validation mode)
+After=proton-rag-anything.service proton-rag-ollama.service
+Requires=proton-rag-anything.service proton-rag-ollama.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/proton-rag/app
+EnvironmentFile=%h/.config/proton-rag/daemon.env
+ExecStart=%h/.local/share/proton-rag/app/.venv/bin/proton-rag --synthetic-dir %h/.local/share/proton-rag/fixtures
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/proton-rag
+MemoryMax=700M
+CPUQuota=100%
+
+[Install]
+WantedBy=default.target

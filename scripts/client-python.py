@@ -1,0 +1,40 @@
+"""Second real-service client; no excerpts or credentials in output."""
+
+import asyncio
+import json
+import os
+import sys
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+
+async def run():
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k in ("PATH", "RAG_STATE_DIR", "ANYTHING_URL", "ANYTHING_API_KEY")
+    }
+    async with stdio_client(
+        StdioServerParameters(command=sys.executable, args=["-m", "proton_rag.mcp_server"], env=env)
+    ) as (r, w):
+        async with ClientSession(r, w) as client:
+            init = await client.initialize()
+            tools = await client.list_tools()
+            assert [t.name for t in tools.tools] == ["search_mail"]
+            result = await client.call_tool("search_mail", {"query": "When does cobalt arrive?"})
+            assert not result.isError and "Tuesday" in result.content[0].text
+            assert "imap://Folders/test/" in result.content[0].text
+            print(
+                json.dumps(
+                    {
+                        "client": "Python SDK",
+                        "protocol": init.protocolVersion,
+                        "transport": "stdio",
+                        "live": True,
+                        "passed": True,
+                    }
+                )
+            )
+
+
+asyncio.run(run())
