@@ -64,11 +64,12 @@ def synchronize(catalog, backend, snapshot, synthetic=False):
         keep.add(key)
         if existing.get(key, {}).get("active"):
             continue
-        catalog.intent(key, snapshot.validity, uid, digest, synthetic)
         parsed = extract(raw)
         skipped += len(parsed["skipped"])
         if set(parsed["skipped"]) & {"parse_failed", "parse_timeout_or_resource_limit"}:
             raise SnapshotError("Parser failed; preserve prior retrieval data")
+        # Journal only after extraction succeeds; parsing failures cannot dispatch uploads.
+        catalog.intent(key, snapshot.validity, uid, digest, synthetic)
         ingest = (
             backend.recover if key in existing and hasattr(backend, "recover") else backend.ensure
         )

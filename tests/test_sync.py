@@ -77,3 +77,31 @@ def test_private_and_synthetic_datasets_cannot_mix(tmp_path):
     synchronize(catalog, backend, snapshot, synthetic=True)
     with pytest.raises(SnapshotError):
         synchronize(catalog, backend, snapshot, synthetic=False)
+
+
+def test_parser_timeout_can_retry_without_pending_upload(tmp_path, monkeypatch):
+    import proton_rag.sync as sync
+    from proton_rag.anything import Anything
+
+    class RecoveringBackend(Backend):
+        recover = Anything.recover
+
+        def find(self, key):
+            return [key] if key in self.docs else []
+
+    path = tmp_path / "state.db"
+    backend = RecoveringBackend()
+    synchronize(Catalog(path), backend, Snapshot("1", {"7": b"\nOld message"}))
+    snapshot = Snapshot("1", {"8": b"\nNew message"})
+    original_extract = sync.extract
+    monkeypatch.setattr(
+        sync, "extract", lambda raw: {"text": "", "skipped": ["parse_timeout_or_resource_limit"]}
+    )
+    with pytest.raises(SnapshotError):
+        synchronize(Catalog(path), backend, snapshot)
+    assert backend.calls == 1 and len(backend.docs) == 1
+    monkeypatch.setattr(sync, "extract", original_extract)
+    synchronize(Catalog(path), backend, snapshot)
+    synchronize(Catalog(path), backend, snapshot)
+    assert backend.calls == 2 and len(backend.docs) == 1
+    assert next(iter(Catalog(path).rows().values()))["uid"] == "8"
