@@ -20,26 +20,57 @@ class PendingUploadError(RuntimeError):
     pass
 
 
+class IndexError(RuntimeError):
+    """Only deliberately selected, non-sensitive diagnostics cross this boundary."""
+
+    def __init__(self, code, operation, http_status=None):
+        self.diagnostic = {"code": code, "operation": operation}
+        if http_status is not None:
+            self.diagnostic["http_status"] = http_status
+        super().__init__(f"Local index failure: {code} ({operation})")
+
+
 class Anything:
-    def __init__(self, url, key, workspace="proton-mail"):
+    def __init__(self, url, key, workspace="proton-mail", embedding_timeout=300):
         if not re.fullmatch(r"[a-zA-Z0-9_-]+", workspace):
             raise ValueError("Invalid workspace slug")
         self.url = local_url(url) + "/api/v1"
         self.workspace = workspace
         self.headers = {"Authorization": f"Bearer {key}"}
         self._documents = None
+        self.embedding_timeout = embedding_timeout
 
     def request(self, method, path, data=None):
+        operation = (
+            "embed"
+            if path.endswith("/update-embeddings")
+            else {
+                "/documents": "list",
+                "/document/raw-text": "upload",
+                "/system/remove-documents": "remove",
+            }.get(path, "request")
+        )
         try:
-            with httpx.Client(timeout=60, trust_env=False) as client:
+            timeout = httpx.Timeout(
+                60, connect=10, read=self.embedding_timeout if operation == "embed" else 60
+            )
+            with httpx.Client(timeout=timeout, trust_env=False) as client:
                 response = client.request(method, self.url + path, json=data, headers=self.headers)
                 response.raise_for_status()
                 value = response.json()
                 if value.get("success") is False or value.get("error"):
-                    raise ValueError("API failure")
+                    raise IndexError("index_api", operation)
                 return value
+        except IndexError:
+            raise
+        except httpx.TimeoutException:
+            raise IndexError("index_timeout", operation) from None
+        except httpx.HTTPStatusError as error:
+            raise IndexError("index_http", operation, error.response.status_code) from None
+        except httpx.TransportError:
+            raise IndexError("index_connection", operation) from None
         except Exception:
-            raise RuntimeError("Local index request failed") from None
+            raise IndexError("index_response", operation) from None
 
     def find(self, key):
         if not KEY.fullmatch(key):

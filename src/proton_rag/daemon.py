@@ -12,6 +12,12 @@ from .anything import Anything
 from .config import Settings
 from .mailbox import Mailbox, Snapshot
 from .sync import Catalog, synchronize, synchronize_folder
+from .health import check_storage, report_error, DiskLowError
+
+
+def record_progress(catalog, values):
+    catalog.update_runtime(last_progress=values)
+    logging.info(json.dumps({"event": "sync_progress", **values}))
 
 
 def main():
@@ -31,7 +37,10 @@ def main():
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, lambda *_: stop.set())
         backend = Anything(
-            settings.anything_url, os.environ["ANYTHING_API_KEY"], settings.workspace
+            settings.anything_url,
+            os.environ["ANYTHING_API_KEY"],
+            settings.workspace,
+            embedding_timeout=settings.embedding_timeout,
         )
         catalog = Catalog(settings.state_dir / "catalog.db")
         backoff = 2
@@ -39,6 +48,7 @@ def main():
             mailbox = None
             failed = False
             try:
+                check_storage(settings, catalog)
                 backend.refresh()
                 if args.synthetic_dir:
                     files = sorted(args.synthetic_dir.glob("*.eml"))
@@ -70,8 +80,9 @@ def main():
                             if folder not in available:
                                 raise ValueError("Configured folder unavailable")
                             catalog.observe(mailbox.inventory(folder))
-                        except Exception:
+                        except Exception as error:
                             catalog.folder_finished(folder, successful=False)
+                            report_error(catalog, "inventory_failed", error)
                             failed = True
                     for folder in folders:
                         if stop.is_set():
@@ -86,23 +97,30 @@ def main():
                                 folder,
                                 settings,
                                 stop,
-                                progress=lambda values: logging.info(
-                                    json.dumps({"event": "sync_progress", **values})
+                                progress=lambda values: record_progress(catalog, values),
+                                before_batch=lambda: check_storage(settings, catalog),
+                                on_error=lambda error: report_error(
+                                    catalog, "message_sync_failed", error
                                 ),
                             )
                             failed = failed or result["failed_messages"] > 0
                             logging.info(json.dumps({"event": "folder_sync_ok", **result}))
-                        except Exception:
+                        except DiskLowError:
+                            raise
+                        except Exception as error:
                             catalog.folder_finished(folder, successful=False)
                             failed = True
-                            logging.warning(json.dumps({"event": "folder_sync_failed"}))
+                            report_error(catalog, "folder_sync_failed", error)
                     # Missing folders retain their catalog until an operator explicitly reindexes.
                 if args.once:
                     raise SystemExit(1 if failed else 0)
+                catalog.update_runtime(state="degraded" if failed else "running")
                 backoff = min(backoff * 2, 60) if failed else settings.poll_seconds
                 stop.wait(backoff)
-            except Exception:
-                logging.warning(json.dumps({"event": "sync_failed", "retry_seconds": backoff}))
+            except Exception as error:
+                report_error(catalog, "sync_failed", error)
+                if not isinstance(error, DiskLowError):
+                    catalog.update_runtime(state="degraded")
                 if args.once:
                     raise SystemExit(1) from None
                 stop.wait(backoff)

@@ -16,7 +16,11 @@ The daemon and MCP server share environment-based settings. Point both at the sa
 | `RAG_FOLDERS` | JSON array; empty/unset discovers all selectable folders |
 | `RAG_EXCLUDED_FOLDERS` | JSON array of exact folder names to exclude |
 | `RAG_POLL_SECONDS` | `30` |
-| `RAG_BATCH_SIZE` | `25`; bounds work between cancellation checks |
+| `RAG_EMBEDDING_TIMEOUT` | `300` seconds; read timeout for CPU-bound embedding requests (other index API requests: 60 seconds) |
+| `RAG_BATCH_SIZE` | `25`; bounds work between disk checks; embeddings commit per message |
+| `RAG_MIN_FREE_BYTES` | `2147483648` (2 GiB); pause ingestion below this free space |
+| `RAG_WARN_FREE_BYTES` | `3221225472` (3 GiB); log low-space warnings |
+| `RAG_STORAGE_PATHS` | Optional JSON array of host paths on backend storage filesystems; checked alongside the catalog |
 | `RAG_MAX_MESSAGE_BYTES` | `33554432`; larger bodies skipped |
 | `RAG_PARSER_TIMEOUT` | `15` seconds |
 | `RAG_MAX_TEXT_CHARS`, `RAG_MAX_PARTS` | `200000`, `200`; extraction bounds |
@@ -51,7 +55,7 @@ Each catalog has a persistent document namespace and is bound to its workspace; 
 
 Copies in multiple folders retain their locations. Search suppresses duplicate results when Message-ID and content digest match. Missing Message-ID or differing content can produce separate results. Metadata and attachments remain associated with each indexed message.
 
-Only one daemon may write a catalog. Logs record events and counts rather than message contents. A failed connection or incomplete inventory must not become an index purge. Oversized and unsupported content is skipped within configured limits. A failed parser or unresolved upload is reported without starving the remaining messages; deletion reconciliation waits until those failures are resolved. Do not increase parser limits without considering host memory.
+Only one daemon may write a catalog. The supplied service allows seven minutes for graceful shutdown so a five-minute embedding request can finish; adjust `TimeoutStopSec` if you raise `RAG_EMBEDDING_TIMEOUT`. Logs record events and counts rather than message contents. A failed connection or incomplete inventory must not become an index purge. Oversized and unsupported content is skipped within configured limits. A failed parser or unresolved upload is reported without starving the remaining messages; deletion reconciliation waits until those failures are resolved. Do not increase parser limits without considering host memory.
 
 A crash after upload dispatch can leave an uncertain upload. Recovery checks for the stable document identity before retrying. If no document is visible, it stops that message for reconciliation rather than duplicating a potentially in-flight upload. Verify the remote request has stopped and inspect the specific pending catalog entry before any repair; never reset the whole catalog as a retry.
 
@@ -72,3 +76,61 @@ Fixtures are isolated from production. Use a fresh state directory and `ANYTHING
 The catalog now stores extracted text alongside message metadata. New imports populate it automatically. On existing installations, the daemon backfills missing text from read-only Bridge fetches without re-embedding existing documents. Until backfill completes, reading an uncached message returns an explicit error. Keep the catalog and AnythingLLM volume together in backups; both contain private mail-derived text.
 
 `index_status` reports the last observed inventories of all configured folders, indexed entries, cached text availability, pending entries, and the dates of indexed mail. Counts include folder copies, not unique emails. Search responses include this coverage report. A folder is complete only after stable reconciliation and all its entries are indexed. Coverage is a snapshot and can become stale; it does not turn relevance search into an exhaustive count. Missing results must not be interpreted as proof of absence while indexing is incomplete.
+
+
+## Index health
+
+Ask your assistant to call `index_status`. Its `runtime` object reports the last observed state (`running`, `degraded`, `paused`, or `maintenance`), free space, the last batch's progress, and a redacted `last_error` with an operation and error code. `updated_at` is an observation timestamp, not proof that the service is still running. Errors retain their timestamps after recovery; compare them with current progress. Use `systemctl --user status proton-rag-daemon.service` to check the live process.
+
+Ingestion checks free space before each cycle and each batch. Below 2 GiB it pauses and retries automatically; search and cached message reading remain available. The pause does not delete indexed mail. Set `RAG_STORAGE_PATHS` if the backend volume is on a different filesystem from the catalog. Use existing host paths, for example `RAG_STORAGE_PATHS='["/mnt/mail-index"]'`. Warning space must be at least the pause threshold.
+
+Logs distinguish timeouts (`index_timeout`), transport failures (`index_connection`), HTTP status failures (`index_http`), API failures (`index_api`), changed mailbox inventories (`mailbox_changed`), parser failures, and uncertain uploads (`upload_reconciliation`). They omit server response bodies, credentials, email content, and folder names. A changed inventory retains the index and retries; it is not a mailbox purge.
+
+## Database maintenance
+
+LanceDB retains old table versions after each embedded document. On the pinned AnythingLLM version, batching HTTP requests still writes one revision per document. Periodic maintenance compacts the current table and prunes versions older than one hour through LanceDB's supported API. The current table is preserved; unrelated workspaces are left alone.
+
+Maintenance needs a background daemon managed by the supplied systemd user service and a dedicated named AnythingLLM volume. It briefly stops ingestion and AnythingLLM, so vector search is unavailable during that window. Bridge and Ollama stay running. Before changing the database it backs up the catalog and the complete AnythingLLM volume in a private directory. After maintenance it verifies the vector row count and restarts the services. Two completed recovery snapshots are retained; backups contain private mail-derived data and need disk space too.
+
+From the repository root, with `mail.env` loaded as in the README:
+
+```bash
+uv run proton-rag-maintain \
+  --backup-dir "$HOME/.local/share/proton-rag/backups"
+```
+
+For systemd-managed Podman/Quadlet installations, use:
+
+```bash
+uv run proton-rag-maintain --engine podman \
+  --backend-service proton-rag-anything.service \
+  --backup-dir "$HOME/.local/share/proton-rag/backups"
+```
+
+Use a dedicated backup directory outside `RAG_STATE_DIR`. `--retain-hours 24` keeps more history if preferred (default: 1). The command reuses the backend's installed image and volume, without downloading a new image. It refuses to optimize if writers cannot be stopped or the backup fails. A failure retains the backup and reports a safe error type; inspect service status before retrying.
+
+To schedule maintenance, create `~/.config/proton-rag/maintenance.env`:
+
+```bash
+RAG_CONTAINER_ENGINE=docker
+RAG_MAINTENANCE_OPTIONS=""
+```
+
+For Podman replace those values with:
+
+```bash
+RAG_CONTAINER_ENGINE=podman
+RAG_MAINTENANCE_OPTIONS="--backend-service proton-rag-anything.service"
+```
+
+Then install the timer and service from the repository root:
+
+```bash
+chmod 600 "$HOME/.config/proton-rag/maintenance.env"
+cp deploy/proton-rag-maintenance.service deploy/proton-rag-maintenance.timer \
+  "$HOME/.config/systemd/user/"
+systemctl --user daemon-reload
+systemctl --user enable --now proton-rag-maintenance.timer
+```
+
+The timer runs about every two hours after the preceding run finishes. View its results with `journalctl --user -u proton-rag-maintenance.service -n 20`. The background daemon guide's stable `app` symlink is required. Never manually delete LanceDB's `_versions`, data, or transaction files while services are running.
