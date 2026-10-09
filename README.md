@@ -1,201 +1,279 @@
-# Proton RAG MCP
+<p align="center">
+  <img src="docs/assets/banner.svg" alt="Proton RAG MCP — your inbox, ready for your AI assistant" width="1040">
+</p>
 
-**Search your Proton Mail from an AI assistant, with retrieval running locally.**
+<p align="center">
+  <a href="https://github.com/waf1102/proton-rag-mcp/actions/workflows/checks.yml"><img src="https://github.com/waf1102/proton-rag-mcp/actions/workflows/checks.yml/badge.svg" alt="Checks"></a>
+  <img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&amp;logoColor=white" alt="Python 3.11 or newer">
+  <img src="https://img.shields.io/badge/MCP-stdio-8B5CF6" alt="MCP over stdio">
+  <img src="https://img.shields.io/badge/Platform-Linux-3A4856?logo=linux&amp;logoColor=white" alt="Linux">
+</p>
 
-Proton RAG MCP turns messages and supported attachments across Proton Mail's selectable folders into a searchable index. It connects through Proton Mail Bridge, extracts text in Python, stores documents and vectors in AnythingLLM, and uses Ollama for embeddings. An MCP server lets compatible assistants retrieve short excerpts with citations back to the source message.
+<p align="center">
+  <a href="#requirements">Requirements</a> ·
+  <a href="#get-started">Get started</a> ·
+  <a href="#connect-your-ai-assistant">Connect your assistant</a> ·
+  <a href="#documentation">Documentation</a>
+</p>
 
-- **Local search:** mail indexing and retrieval stay on your machine.
-- **Read-only mail access:** messages are not moved, deleted, or marked as read.
-- **Attachment search:** supported PDF and DOCX text is indexed alongside message bodies.
-- **Cited results:** each excerpt includes a source identifier so results can be traced.
+**Search your Proton Mail in plain language from Claude Code, Cursor, or VS Code.** Find messages and attachments, trace results back to their sources, and optionally generate answers with OpenRouter.
 
-> **How your data is used:** indexing and search run locally. Optional `answer_mail` sends your query and selected mail excerpts to OpenRouter for a cited answer. Ollama supplies embeddings; no local chat model is required.
+> “Find the invoice for my last laptop purchase.”<br>
+> “What did the contractor say about the delivery date?”<br>
+> “Find the email with the signed agreement attached.”
+
+- **Search across folders** — index all selectable folders, or choose your own.
+- **Find text in attachments** — includes supported PDF and DOCX files.
+- **Keep mail untouched** — no sending, deleting, moving, or marking messages as read.
+- **See where answers came from** — results include subjects, senders, dates, and source citations.
+- **Pick up where you left off** — incremental indexing resumes after interruptions.
+
+## How it works
+
+```mermaid
+flowchart LR
+    Mail[Proton Mail Bridge] -->|Read-only IMAP| Index[Python indexer]
+    Index --> Store[AnythingLLM]
+    Store <-->|Local embeddings| Ollama[Ollama]
+    Assistant[Your AI assistant] <-->|MCP| Server[MCP server]
+    Server -->|Search| Store
+    Server -.->|Optional answers| Router[OpenRouter]
+```
+
+Indexing and retrieval run on your machine. Search results are then shared with the assistant you connect, so that assistant's data policies apply. Enabling `answer_mail` also sends selected excerpts and your question to OpenRouter. [More about data storage and privacy →](docs/security.md)
+
+## Requirements
+
+| You need | Details |
+| --- | --- |
+| **Linux** | Run Bridge, the indexer, and the MCP server on the same host. The client examples below assume the client also runs there. |
+| **Proton Mail Bridge** | A [paid Proton Mail plan with Bridge access](https://proton.me/support/protonmail-bridge-install), Bridge installed and signed in, and its IMAP credentials. Use IMAP **STARTTLS** mode. |
+| **Python 3.11+ and uv** | Install [Python](https://www.python.org/downloads/) and [uv](https://docs.astral.sh/uv/getting-started/installation/). |
+| **Docker Engine + Compose v2** | Follow [Docker's installation guide](https://docs.docker.com/engine/install/). Your user must be able to run `docker compose`. [Rootless Podman](docs/podman.md) is also supported. |
+| **Git, Bash, and OpenSSL** | Used by the setup commands below. |
+| **Memory and storage** | Budget roughly **3 GiB of available RAM** for this stack, plus disk space for images, the embedding model, and your mail index. Storage grows with mailbox size. |
+| **An MCP client** | Claude Code, Cursor, VS Code with Copilot, or another client that can launch a local stdio server. |
+
+**Optional:** an [OpenRouter API key](https://openrouter.ai/settings/keys) with available credits for `answer_mail`. Search works without one. A GPU and a local chat model are not required.
 
 ## Get started
 
-You need a Linux host, Python 3.11 or newer, [uv](https://docs.astral.sh/uv/), and Docker or rootless Podman. Allow roughly 3 GiB of memory for the configured services, plus space for container images, the embedding model, and indexed data. A configured Proton Mail Bridge and its IMAP credentials and trusted certificate are required.
+Docker Compose runs **AnythingLLM and Ollama**. The Python indexer and MCP server run on the host alongside Bridge.
 
-```sh
+### 1. Download and install
+
+```bash
 git clone https://github.com/waf1102/proton-rag-mcp.git
 cd proton-rag-mcp
 uv sync --locked
 ```
 
-Choose a container runtime below. Both keep the service ports on host loopback and use persistent named volumes. The Python application runs on the host.
+### 2. Start the local index
 
-<details>
-<summary><strong>Docker setup</strong></summary>
+Create AnythingLLM's private service secrets. This preserves the file if you already have one:
 
-These commands translate the checked-in Podman container settings to Docker. Docker deployment has not been validated by this project; the tested deployment uses Podman.
-
-Create a private configuration file for AnythingLLM:
-
-```sh
+```bash
 umask 077
 mkdir -p "$HOME/.config/proton-rag"
-if [ ! -e "$HOME/.config/proton-rag/anything.env" ]; then
-  printf 'AUTH_TOKEN=%s\nJWT_SECRET=%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" \
-    > "$HOME/.config/proton-rag/anything.env"
-fi
-docker network create proton-rag
-```
-
-On an existing installation, reuse the configuration file instead of generating new secrets.
-
-```sh
-docker run -d --name proton-rag-ollama --restart unless-stopped \
-  --network proton-rag --memory=1000m --cpus=1 \
-  -p 127.0.0.1:11434:11434 -v proton-rag-ollama:/root/.ollama \
-  -e OLLAMA_NUM_PARALLEL=1 -e OLLAMA_MAX_LOADED_MODELS=1 -e OLLAMA_KEEP_ALIVE=2m \
-  ollama/ollama@sha256:6697852aa235e8fb4e1e77cfab9bbf70d51d3760cb0d266e9fb43cf2b8e44f66
-```
-
-Use the exact Ollama image digest from [`deploy/proton-rag-ollama.container`](deploy/proton-rag-ollama.container) if updating the pinned version.
-
-```sh
-docker exec proton-rag-ollama ollama pull nomic-embed-text
-docker run -d --name proton-rag-anything --restart unless-stopped \
-  --network proton-rag --memory=1200m --cpus=1 \
-  -p 127.0.0.1:3001:3001 -v proton-rag-anything:/app/server/storage \
-  --env-file "$HOME/.config/proton-rag/anything.env" \
-  -e STORAGE_DIR=/app/server/storage -e SERVER_PORT=3001 -e DISABLE_TELEMETRY=true \
-  -e LLM_PROVIDER=ollama -e OLLAMA_BASE_PATH=http://proton-rag-ollama:11434 \
-  -e OLLAMA_MODEL_PREF=nomic-embed-text -e EMBEDDING_ENGINE=ollama \
-  -e EMBEDDING_BASE_PATH=http://proton-rag-ollama:11434 \
-  -e EMBEDDING_MODEL_PREF=nomic-embed-text -e EMBEDDING_MODEL_MAX_CHUNK_LENGTH=2048 \
-  -e VECTOR_DB=lancedb \
-  mintplexlabs/anythingllm@sha256:5ce7b65badd7de94827846d33fe1b38eff71f86875b7ce88d6e56d2371ec2d6b
-```
-
-Wait for AnythingLLM at `http://127.0.0.1:3001`. Use `docker logs proton-rag-anything` to check startup. Stop the containers with `docker stop proton-rag-anything proton-rag-ollama`; named volumes retain the index and model.
-
-</details>
-
-<details>
-<summary><strong>Docker Compose setup</strong></summary>
-
-Use Docker with the Compose plugin and the checked-in [`deploy/compose.yaml`](deploy/compose.yaml). Choose this **instead of** the standalone Docker commands above; both use the same container names and persistent volumes. Compose configuration is validated, but Docker deployment has not been exercised.
-
-From the checkout, create the private configuration file if it does not already exist:
-
-```sh
-umask 077
-mkdir -p "$HOME/.config/proton-rag"
-if [ ! -e "$HOME/.config/proton-rag/anything.env" ]; then
-  printf 'AUTH_TOKEN=%s\nJWT_SECRET=%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" \
+if [ ! -f "$HOME/.config/proton-rag/anything.env" ]; then
+  printf 'AUTH_TOKEN=%s\nJWT_SECRET=%s\n' \
+    "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" \
     > "$HOME/.config/proton-rag/anything.env"
 fi
 ```
 
-Start Ollama, download the embedding model, then start AnythingLLM:
+Start the services and download the embedding model:
 
-```sh
-docker compose -f deploy/compose.yaml up -d --wait ollama
-docker compose -f deploy/compose.yaml exec ollama ollama pull nomic-embed-text
-docker compose -f deploy/compose.yaml up -d --wait
+```bash
+cd deploy
+docker compose up -d --wait ollama
+docker compose exec ollama ollama pull nomic-embed-text
+docker compose up -d --wait
+cd ..
 ```
 
-Open `http://127.0.0.1:3001`, then continue with **Connect your mailbox** below. The Python daemon and MCP server still run on the host.
+Open **[AnythingLLM at localhost:3001](http://127.0.0.1:3001)**, complete setup, and create an API key under **Settings → Developer API**. Save that key for the next step. Keep Ollama / `nomic-embed-text` as the embedding provider and model configured by Compose.
 
-```sh
-docker compose -f deploy/compose.yaml ps
-docker compose -f deploy/compose.yaml logs -f anythingllm
-docker compose -f deploy/compose.yaml down
+Prefer Podman? Use the [Podman guide](docs/podman.md) for this step, then continue below.
+
+### 3. Connect Proton Mail
+
+In Bridge, open your account's mailbox configuration and copy its **IMAP username and password**. These are separate from your Proton login password.
+
+Export Bridge's TLS certificate from **Settings → Advanced settings → Export TLS certificates** ([Proton's guide](https://proton.me/support/comprehensive-guide-to-bridge-settings)). Save the certificate as `~/.config/proton-rag/bridge-ca.pem`. This application needs the certificate, not the exported private key.
+
+Create `~/.config/proton-rag/mail.env` in your editor with the following values. Replace `YOUR_USER` and the three credential placeholders; use the IMAP host and port shown by Bridge if they differ.
+
+```bash
+RAG_STATE_DIR='/home/YOUR_USER/.local/share/proton-rag/mail'
+ANYTHING_URL='http://127.0.0.1:3001'
+ANYTHING_WORKSPACE='proton-mail'
+ANYTHING_API_KEY='YOUR_ANYTHINGLLM_API_KEY'
+IMAP_HOST='127.0.0.1'
+IMAP_PORT='1143'
+IMAP_CA_FILE='/home/YOUR_USER/.config/proton-rag/bridge-ca.pem'
+IMAP_USER='YOUR_BRIDGE_USERNAME'
+IMAP_PASS='YOUR_BRIDGE_PASSWORD'
 ```
 
-`down` preserves the named volumes. Adding `--volumes` deletes the stored index and embedding model.
+Protect the file, then load it into your Bash session:
 
-</details>
-
-<details>
-<summary><strong>Podman setup (tested deployment)</strong></summary>
-
-Use rootless Podman with Quadlet and a working user systemd manager. Create the private AnythingLLM configuration:
-
-```sh
-umask 077
-mkdir -p "$HOME/.config/proton-rag" "$HOME/.config/containers/systemd"
-if [ ! -e "$HOME/.config/proton-rag/anything.env" ]; then
-  printf 'AUTH_TOKEN=%s\nJWT_SECRET=%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" \
-    > "$HOME/.config/proton-rag/anything.env"
-fi
-cp deploy/*.container deploy/*.volume "$HOME/.config/containers/systemd/"
+```bash
+chmod 600 "$HOME/.config/proton-rag/mail.env"
+set -a
+source "$HOME/.config/proton-rag/mail.env"
+set +a
 ```
 
-Reuse existing secrets on an installed system. The Quadlets expect `rag-network.network`. On a new host, create it with:
+### 4. Start indexing
 
-```sh
-printf '[Network]\nNetworkName=rag-network\n' \
-  > "$HOME/.config/containers/systemd/rag-network.network"
-```
+From the repository root, in the same terminal:
 
-Reuse that network file if it already exists, especially when shared with Bridge.
-
-```sh
-systemctl --user daemon-reload
-systemctl --user start proton-rag-ollama.service
-podman exec proton-rag-ollama ollama pull nomic-embed-text
-systemctl --user start proton-rag-anything.service
-```
-
-Wait for AnythingLLM at `http://127.0.0.1:3001`. Check startup with `systemctl --user status proton-rag-anything.service`. Stop with `systemctl --user stop proton-rag-anything.service proton-rag-ollama.service`; named volumes retain data.
-
-For the background Python service and host-specific setup, see [Operations](docs/operations.md#reproduce-installation) and the [Fedora guide](docs/fedora.md).
-
-</details>
-
-## Connect your mailbox
-
-Open AnythingLLM at `http://127.0.0.1:3001`, complete its authenticated setup, and create an API key in its settings. From the checkout, configure the application using environment variables:
-
-```sh
-umask 077
-export RAG_STATE_DIR="$HOME/.local/share/proton-rag/mail"
-export ANYTHING_URL=http://127.0.0.1:3001
-export ANYTHING_WORKSPACE=proton-mail
-export IMAP_HOST=127.0.0.1
-export IMAP_PORT=1143
-export IMAP_CA_FILE=/absolute/path/to/bridge-certificate.pem
-read -rp 'Bridge IMAP username: ' IMAP_USER
-read -rsp 'Bridge IMAP password: ' IMAP_PASS; echo
-read -rsp 'AnythingLLM API key: ' ANYTHING_API_KEY; echo
-export IMAP_USER IMAP_PASS ANYTHING_API_KEY
-mkdir -p "$RAG_STATE_DIR"
+```bash
 uv run python scripts/bootstrap-workspace.py
-uv run proton-rag --once
+uv run proton-rag
 ```
 
-Use the credentials generated by **Bridge**, not your Proton account password. Trust Bridge's certificate explicitly; certificate and hostname checks stay enabled.
+Leave this running while you connect your assistant in another terminal. **You can search as messages become indexed**; you do not need to wait for the entire mailbox. The first import can take a while for large accounts. Later syncs fetch new messages and resume saved progress.
 
-All selectable folders are indexed by default. For a smaller scope, set a JSON folder list such as `RAG_FOLDERS='["INBOX", "Folders/Work"]'`, or exclude folders with `RAG_EXCLUDED_FOLDERS='["Trash", "Spam"]'`. Reads do not change mailbox flags. The first import may take time; later runs fetch only newly encountered messages. Interrupted runs resume from the catalog.
+All selectable folders are included by default. To choose folders, add either of these settings to `mail.env` before starting the indexer:
 
-Run `uv run proton-rag` for continuous synchronization. For the background service, see [Operations](docs/operations.md).
+```bash
+# Index only these folders:
+RAG_FOLDERS='["INBOX", "Folders/Work"]'
+
+# Or keep all folders except these:
+RAG_EXCLUDED_FOLDERS='["Trash", "Spam"]'
+```
+
+Use your exact Bridge folder names. If both settings are present, exclusions take precedence. For unattended indexing, follow the [background service guide](docs/operations.md#background-service).
 
 ## Connect your AI assistant
 
-Add a **stdio MCP server** to a client that supports local server processes:
+The client launches the MCP server automatically. **Keep the indexer running separately** to pick up new mail.
 
-| Setting | Value |
-| --- | --- |
-| Command | Absolute path to this checkout's `.venv/bin/proton-rag-mcp` |
-| Environment | `RAG_STATE_DIR`, `ANYTHING_API_KEY`, `ANYTHING_URL`, and `ANYTHING_WORKSPACE` from setup |
-| Optional answers | Supply `OPENROUTER_API_KEY`; choose a model with `OPENROUTER_MODEL` |
-| Transport | stdio; no HTTP endpoint is provided |
+Choose a client below. Replace `/home/YOUR_USER/proton-rag-mcp` with your checkout's absolute path and use the same API key, state directory, and workspace as above. Run `pwd` from the repository root to find your checkout path. Do not use `~` in JSON paths.
 
-Ask the assistant to use **`search_mail`** for a question such as “Find my latest invoice.” Results include excerpts, sender, subject, date, attachment names, and folder locations. Citations identify indexed messages; they are not download links.
+<details>
+<summary><strong>Claude Code</strong></summary>
 
-With an OpenRouter key configured, **`answer_mail`** answers a question using selected excerpts and returns citations. Provider charges apply. The model defaults to `openai/gpt-4.1-mini` and is configurable. Keep credentials in your client's secure environment, outside committed configuration.
+In a new Bash terminal, enter the repository directory, then load your configuration and register the server for your user:
 
-Search returns 10 results by default; the configurable maximum is 50. Excerpts default to 4,000 characters, and answers use up to five excerpts with a 1,024-token output limit. See [configuration](docs/operations.md#configuration) for overrides.
+```bash
+cd /home/YOUR_USER/proton-rag-mcp
+set -a
+source "$HOME/.config/proton-rag/mail.env"
+set +a
 
-## Development and further reading
-
-```sh
-uv run pytest -q
-uv run ruff check .
-uv run ruff format --check .
-npm ci --ignore-scripts
-npm run test:interop
+claude mcp add --scope user \
+  --env ANYTHING_API_KEY="$ANYTHING_API_KEY" \
+  --env ANYTHING_URL="$ANYTHING_URL" \
+  --env ANYTHING_WORKSPACE="$ANYTHING_WORKSPACE" \
+  --env RAG_STATE_DIR="$RAG_STATE_DIR" \
+  --transport stdio proton-mail -- "$PWD/.venv/bin/proton-rag-mcp"
 ```
 
-[Operations & troubleshooting](docs/operations.md) · [Security & data storage](docs/security.md) · [Fedora migration](docs/fedora.md) · [Validation evidence](docs/validation.md)
+Open Claude Code and run `/mcp` to confirm `proton-mail` is connected. [Claude Code MCP documentation](https://code.claude.com/docs/en/mcp).
+
+</details>
+
+<details>
+<summary><strong>Cursor</strong></summary>
+
+Add this server to your personal `~/.cursor/mcp.json` file. If the file already contains servers, merge the `proton-mail` entry into its `mcpServers` object.
+
+```json
+{
+  "mcpServers": {
+    "proton-mail": {
+      "command": "/home/YOUR_USER/proton-rag-mcp/.venv/bin/proton-rag-mcp",
+      "env": {
+        "ANYTHING_API_KEY": "YOUR_ANYTHINGLLM_API_KEY",
+        "ANYTHING_URL": "http://127.0.0.1:3001",
+        "ANYTHING_WORKSPACE": "proton-mail",
+        "RAG_STATE_DIR": "/home/YOUR_USER/.local/share/proton-rag/mail"
+      }
+    }
+  }
+}
+```
+
+Save the file, restart Cursor, and enable `proton-mail` in its MCP settings. The tools are available to Agent. [Cursor MCP documentation](https://prod.cursor.com/help/customization/mcp).
+
+</details>
+
+<details>
+<summary><strong>VS Code with GitHub Copilot</strong></summary>
+
+Open the Command Palette and run **MCP: Open User Configuration**. Add this server and the password input to your user configuration, preserving any existing entries:
+
+```json
+{
+  "servers": {
+    "proton-mail": {
+      "type": "stdio",
+      "command": "/home/YOUR_USER/proton-rag-mcp/.venv/bin/proton-rag-mcp",
+      "env": {
+        "ANYTHING_API_KEY": "${input:proton-anything-key}",
+        "ANYTHING_URL": "http://127.0.0.1:3001",
+        "ANYTHING_WORKSPACE": "proton-mail",
+        "RAG_STATE_DIR": "/home/YOUR_USER/.local/share/proton-rag/mail"
+      }
+    }
+  },
+  "inputs": [
+    {
+      "id": "proton-anything-key",
+      "type": "promptString",
+      "description": "AnythingLLM API key for Proton Mail",
+      "password": true
+    }
+  ]
+}
+```
+
+Start the server from the configuration editor, enter your AnythingLLM key when prompted, and enable its tools in Copilot Chat's Agent mode. [VS Code MCP documentation](https://code.visualstudio.com/docs/agent-customization/mcp-servers).
+
+</details>
+
+Client configurations only need access to the local index; do not add your Bridge password. Keep API keys in personal configuration, outside Git.
+
+### Try it
+
+Ask your assistant:
+
+> Use `search_mail` to find emails about my upcoming trip. Include the sender, date, and source for each result.
+
+| Tool | What it does | Needs OpenRouter? |
+| --- | --- | --- |
+| `search_mail` | Finds indexed messages and returns excerpts, metadata, and citations. | No |
+| `answer_mail` | Generates an answer from selected excerpts, with citations. | Yes |
+
+Citations identify messages in your index; they are not clickable Proton Mail links. PDF and DOCX text extraction is supported; scanned images need OCR before their text can be searched.
+
+### Optional: enable OpenRouter answers
+
+Add `OPENROUTER_API_KEY` to the MCP server's environment in your client configuration. For Cursor or VS Code, add these entries inside the server's `env` object (use a password input in VS Code if preferred):
+
+```json
+"OPENROUTER_API_KEY": "YOUR_OPENROUTER_API_KEY",
+"OPENROUTER_MODEL": "openai/gpt-4.1-mini"
+```
+
+For Claude Code, include an additional `--env OPENROUTER_API_KEY="$OPENROUTER_API_KEY"` when registering the server, after setting that variable in your shell. To update an existing registration, run `claude mcp remove --scope user proton-mail` and repeat the registration command with the extra option.
+
+Restart the MCP server in your client. `answer_mail` will appear alongside `search_mail`. The model above is the default; you can choose another OpenRouter model. OpenRouter usage is billed to your account. Your assistant can already use search results in its own replies without enabling this extra tool.
+
+## Documentation
+
+| Guide | What you'll find |
+| --- | --- |
+| [Configuration & operations](docs/operations.md) | All environment variables, background services, upgrades, and backups. |
+| [Podman setup](docs/podman.md) | Rootless containers with systemd Quadlet. |
+| [Privacy & security](docs/security.md) | Mail access, local storage, and what leaves your machine. |
+| [Fedora deployment](docs/fedora.md) | Fedora-specific setup and migration notes. |
+| [Validation](docs/validation.md) | Test commands, live checks, and deployment coverage. |
+
+## Contributing
+
+Bug reports and focused pull requests are welcome. Include reproduction steps and redact mail contents and credentials from logs. See [Validation](docs/validation.md) for the development checks.

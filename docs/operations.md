@@ -31,7 +31,7 @@ Folder lists use decoded Unicode names, not IMAP wire encoding. Exclusions take 
 ## Background service
 
 1. Install the checkout with `uv sync --locked`. Set `~/.local/share/proton-rag/app` to the chosen checkout using a symlink.
-2. Follow either container setup in the README. Podman uses the checked-in Quadlets; Docker Compose manages containers independently.
+2. Follow [Docker Compose setup](../README.md#2-start-the-local-index) or the [Podman guide](podman.md). Podman uses the checked-in Quadlets; Docker Compose manages containers independently.
 3. Store ingestion settings in mode-0600 `~/.config/proton-rag/mail.env`. Put one `NAME=value` assignment on each line, use absolute paths, and protect directories with mode 0700. The daemon does not need an OpenRouter key.
 4. Create the configured AnythingLLM workspace using `scripts/bootstrap-workspace.py` with the same settings. Run `proton-rag --once` to verify connectivity and indexing.
 5. For Podman, copy `deploy/proton-rag-daemon.service` to `~/.config/systemd/user/`, then run:
