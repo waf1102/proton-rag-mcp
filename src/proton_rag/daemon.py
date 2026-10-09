@@ -68,8 +68,17 @@ def main():
                             if folder not in available:
                                 raise ValueError("Configured folder unavailable")
                             result = synchronize_folder(
-                                catalog, backend, mailbox, folder, settings, stop
+                                catalog,
+                                backend,
+                                mailbox,
+                                folder,
+                                settings,
+                                stop,
+                                progress=lambda values: logging.info(
+                                    json.dumps({"event": "sync_progress", **values})
+                                ),
                             )
+                            failed = failed or result["failed_messages"] > 0
                             logging.info(json.dumps({"event": "folder_sync_ok", **result}))
                         except Exception:
                             failed = True

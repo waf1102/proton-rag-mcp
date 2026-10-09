@@ -7,6 +7,7 @@ import uuid
 from .extract import extract
 from .mailbox import SnapshotError
 from .config import Settings
+from .anything import PendingUploadError
 
 
 class Catalog:
@@ -33,6 +34,19 @@ class Catalog:
             self.namespace = db.execute(
                 "SELECT value FROM catalog_settings WHERE name='namespace'"
             ).fetchone()[0]
+
+    def bind_workspace(self, workspace):
+        with self.connect() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO catalog_settings VALUES ('workspace',?)", (workspace,)
+            )
+            saved = db.execute(
+                "SELECT value FROM catalog_settings WHERE name='workspace'"
+            ).fetchone()[0]
+            if saved != workspace:
+                raise ValueError(
+                    "Catalog belongs to another workspace; use a separate state directory"
+                )
 
     def connect(self):
         db = sqlite3.connect(self.path, timeout=30)
@@ -125,6 +139,8 @@ def synchronize(catalog, backend, snapshot, synthetic=False):
     if not snapshot.validity.isdigit() or any(not uid.isdigit() for uid in snapshot.messages):
         raise SnapshotError("Invalid snapshot identities")
     _dataset(catalog, synthetic)
+    if hasattr(backend, "workspace"):
+        catalog.bind_workspace(backend.workspace)
     existing = catalog.rows(snapshot.folder)
     keep, skipped = set(), 0
     for uid, raw in snapshot.messages.items():
@@ -145,9 +161,11 @@ def synchronize(catalog, backend, snapshot, synthetic=False):
     return {"messages": len(keep), "skipped_parts": skipped}
 
 
-def synchronize_folder(catalog, backend, mailbox, folder, settings=None, stop=None):
+def synchronize_folder(catalog, backend, mailbox, folder, settings=None, stop=None, progress=None):
     settings = settings or Settings()
     _dataset(catalog, False)
+    if hasattr(backend, "workspace"):
+        catalog.bind_workspace(backend.workspace)
     inventory = mailbox.inventory(folder)
     existing = catalog.rows(folder)
     active = {
@@ -155,11 +173,14 @@ def synchronize_folder(catalog, backend, mailbox, folder, settings=None, stop=No
         for key, r in existing.items()
         if r["validity"] == inventory.validity and r["active"]
     }
-    keep, skipped, fetched = set(), 0, 0
-    for offset in range(0, len(inventory.uids), settings.batch_size):
+    keep, skipped, fetched, failed = set(), 0, 0, 0
+    ordered = tuple(sorted(inventory.uids, key=int, reverse=True))
+    for offset in range(0, len(ordered), settings.batch_size):
         if stop and stop.is_set():
             raise SnapshotError("Synchronization interrupted")
-        for uid in inventory.uids[offset : offset + settings.batch_size]:
+        for uid in ordered[offset : offset + settings.batch_size]:
+            if stop and stop.is_set():
+                raise SnapshotError("Synchronization interrupted")
             if uid in active:
                 keep.add(active[uid])
                 continue
@@ -173,12 +194,39 @@ def synchronize_folder(catalog, backend, mailbox, folder, settings=None, stop=No
                     if r["uid"] == uid and r["validity"] == inventory.validity
                 )
                 continue
-            key, count = _ingest(
-                catalog, backend, folder, inventory.validity, uid, raw, existing, False, settings
-            )
+            try:
+                key, count = _ingest(
+                    catalog,
+                    backend,
+                    folder,
+                    inventory.validity,
+                    uid,
+                    raw,
+                    existing,
+                    False,
+                    settings,
+                )
+            except (SnapshotError, PendingUploadError):
+                failed += 1
+                continue
             keep.add(key)
             skipped += count
             fetched += 1
+        if progress:
+            progress(
+                {
+                    "processed": min(offset + settings.batch_size, len(ordered)),
+                    "total": len(ordered),
+                    "fetched": fetched,
+                    "failed_messages": failed,
+                }
+            )
     mailbox.verify(inventory)
-    _remove(catalog, backend, existing, keep)
-    return {"messages": len(inventory.uids), "fetched": fetched, "skipped_parts": skipped}
+    if not failed:
+        _remove(catalog, backend, existing, keep)
+    return {
+        "messages": len(inventory.uids),
+        "fetched": fetched,
+        "skipped_parts": skipped,
+        "failed_messages": failed,
+    }

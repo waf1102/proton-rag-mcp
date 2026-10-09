@@ -47,11 +47,11 @@ The supplied unit depends on the Podman service names. With Docker Compose, remo
 
 ## Synchronization and recovery
 
-Each folder has its own UIDVALIDITY/UID identity. The daemon fetches new messages with `BODY.PEEK[]`; existing indexed messages are not downloaded each poll. It never writes to IMAP. Deletions from the local index occur only after a complete, stable inventory of that folder. Unavailable or disappeared folders keep their indexed data until explicitly reconciled; removing a folder from configuration does not erase its existing index.
+Each catalog has a persistent document namespace and is bound to its workspace; switching that workspace requires a new catalog. Each folder has its own UIDVALIDITY/UID identity. The daemon fetches new messages with `BODY.PEEK[]`; existing indexed messages are not downloaded each poll. Newest messages are processed first within each folder. It never writes to IMAP. Deletions from the local index occur only after a complete, stable inventory of that folder. Unavailable or disappeared folders keep their indexed data until explicitly reconciled; removing a folder from configuration does not erase its existing index.
 
 Copies in multiple folders retain their locations. Search suppresses duplicate results when Message-ID and content digest match. Missing Message-ID or differing content can produce separate results. Metadata and attachments remain associated with each indexed message.
 
-Only one daemon may write a catalog. Logs record events and counts rather than message contents. A failed connection or incomplete inventory must not become an index purge. Oversized and unsupported content is skipped within configured limits. Do not increase parser limits without considering host memory.
+Only one daemon may write a catalog. Logs record events and counts rather than message contents. A failed connection or incomplete inventory must not become an index purge. Oversized and unsupported content is skipped within configured limits. A failed parser or unresolved upload is reported without starving the remaining messages; deletion reconciliation waits until those failures are resolved. Do not increase parser limits without considering host memory.
 
 A crash after upload dispatch can leave an uncertain upload. Recovery checks for the stable document identity before retrying. If no document is visible, it stops that message for reconciliation rather than duplicating a potentially in-flight upload. Verify the remote request has stopped and inspect the specific pending catalog entry before any repair; never reset the whole catalog as a retry.
 

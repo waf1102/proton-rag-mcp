@@ -106,8 +106,10 @@ def main():
     settings = Settings.from_env()
     settings.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     backend = Anything(settings.anything_url, os.environ["ANYTHING_API_KEY"], settings.workspace)
+    catalog = Catalog(settings.state_dir / "catalog.db")
+    catalog.bind_workspace(settings.workspace)
     build(
-        Catalog(settings.state_dir / "catalog.db"),
+        catalog,
         backend,
         os.environ.get("OPENROUTER_API_KEY"),
         settings,

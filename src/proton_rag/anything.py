@@ -16,6 +16,10 @@ def local_url(url):
     return url.rstrip("/")
 
 
+class PendingUploadError(RuntimeError):
+    pass
+
+
 class Anything:
     def __init__(self, url, key, workspace="proton-mail"):
         if not re.fullmatch(r"[a-zA-Z0-9_-]+", workspace):
@@ -64,7 +68,7 @@ class Anything:
         # ambiguous upload: a timed-out collector may still commit it later.
         self.refresh()
         if not self.find(key):
-            raise RuntimeError("Pending upload requires reconciliation")
+            raise PendingUploadError("Pending upload requires reconciliation")
         return self.ensure(key, text, before_upload=before_upload)
 
     def ensure(self, key, text, before_upload=None):

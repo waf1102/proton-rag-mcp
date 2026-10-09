@@ -179,3 +179,64 @@ def test_separate_catalogs_own_distinct_remote_documents(tmp_path):
     synchronize(Catalog(tmp_path / "first.db"), backend, Snapshot("1", {}))
     assert len(backend.docs) == 1
     assert next(iter(second.rows())) in backend.docs
+
+
+def test_catalog_refuses_workspace_switch(tmp_path):
+    catalog = Catalog(tmp_path / "state.db")
+    catalog.bind_workspace("first")
+    with pytest.raises(ValueError, match="workspace"):
+        Catalog(tmp_path / "state.db").bind_workspace("second")
+
+
+def test_bad_message_does_not_starve_remaining_folder(tmp_path, monkeypatch):
+    from proton_rag.sync import synchronize_folder
+    from proton_rag.mailbox import Inventory
+    from unittest.mock import Mock
+    import proton_rag.sync as sync
+
+    catalog = Catalog(tmp_path / "state.db")
+    backend = Backend()
+    box = Mock()
+    box.inventory.return_value = Inventory("INBOX", "1", ("1", "2"))
+    box.fetch.side_effect = lambda uid: uid.encode()
+    monkeypatch.setattr(
+        sync,
+        "extract",
+        lambda raw, **kwargs: (
+            {"text": "", "skipped": ["parse_failed"]}
+            if raw == b"2"
+            else {"text": "good", "skipped": [], "metadata": {}}
+        ),
+    )
+    result = synchronize_folder(catalog, backend, box, "INBOX")
+    assert result["failed_messages"] == 1
+    assert len(backend.docs) == 1
+
+
+def test_shutdown_finishes_current_message_and_resumes(tmp_path):
+    import threading
+    from unittest.mock import Mock
+    from proton_rag.sync import synchronize_folder
+    from proton_rag.mailbox import Inventory
+
+    stop = threading.Event()
+    catalog = Catalog(tmp_path / "state.db")
+    backend = Backend()
+    box = Mock()
+    box.inventory.return_value = Inventory("INBOX", "1", ("1", "2", "3"))
+
+    def fetch(uid):
+        stop.set()
+        return b"Subject: stop test\n\nContent"
+
+    box.fetch.side_effect = fetch
+    with pytest.raises(SnapshotError, match="interrupted"):
+        synchronize_folder(catalog, backend, box, "INBOX", stop=stop)
+    assert len(backend.docs) == 1
+    box.verify.assert_not_called()
+    stop.clear()
+    box.fetch.side_effect = None
+    box.fetch.return_value = b"Subject: stop test\n\nContent"
+    result = synchronize_folder(Catalog(tmp_path / "state.db"), backend, box, "INBOX", stop=stop)
+    assert result["fetched"] == 2
+    assert len(backend.docs) == 3
