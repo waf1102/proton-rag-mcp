@@ -92,36 +92,30 @@ async def test_raw_protocol_harness_negotiation_errors_cancellation(tmp_path):
         await asyncio.wait_for(p.wait(), 5)
 
 
-async def test_real_mail_search_deduplicates_and_preserves_locations():
+async def test_real_mail_search_deduplicates_and_preserves_locations(tmp_path):
     from proton_rag.mcp_server import search
     from proton_rag.config import Settings
 
-    class Catalog:
-        def rows(self):
-            return {
-                key: {
-                    "key": key,
-                    "active": 1,
-                    "folder": folder,
-                    "validity": "1",
-                    "uid": "7",
-                    "digest": "abc",
-                    "metadata": json.dumps(
-                        {
-                            "message_id": "<same>",
-                            "subject": "Receipt",
-                            "sender": "sender@example.test",
-                        }
-                    ),
-                }
-                for key, folder in [("a", "INBOX"), ("b", "Folders/旅行")]
-            }
+    from proton_rag.sync import Catalog
+
+    catalog = Catalog(tmp_path / "catalog.db")
+    for key, folder in [("a", "INBOX"), ("b", "Folders/旅行")]:
+        catalog.intent(
+            key,
+            folder,
+            "1",
+            "7",
+            "abc",
+            False,
+            {"message_id": "<same>", "subject": "Receipt", "sender": "sender@example.test"},
+        )
+        catalog.activate(key, [])
 
     class Backend:
         async def search(self, query, limit):
             return [{"text": "x" * 5000, "metadata": {"docSource": key}} for key in ["a", "b"]]
 
-    hits = await search(Catalog(), Backend(), "receipt", 10, Settings())
+    hits = await search(catalog, Backend(), "receipt", 10, Settings())
     assert len(hits) == 1 and len(hits[0]["text"]) == 4000
     assert len(hits[0]["locations"]) == 2
     assert "%E6%97%85" in hits[0]["locations"][1]["citation"]

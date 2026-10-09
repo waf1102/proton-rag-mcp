@@ -21,33 +21,35 @@ async def search(catalog, backend, query, limit, settings):
     # Overfetch to compensate for chunks and messages present in multiple folders.
     results = await backend.search(query, settings.search_max)
     rows = catalog.rows()
-    groups = {}
+    groups, aliases = {}, {}
     for row in rows.values():
         if not row["active"]:
             continue
-        metadata = json.loads(row["metadata"])
-        identity = (metadata.get("message_id") or row["key"], row["digest"])
-        groups.setdefault(identity, []).append(row)
+        canonical = row.get("message_key", row["key"])
+        groups.setdefault(canonical, []).append(row)
+        aliases[row["key"]] = canonical
+        aliases[canonical] = canonical
     hits, seen = [], set()
     for item in results:
-        row = rows.get(item.get("metadata", {}).get("docSource"))
-        if not row or not row["active"]:
+        source = item.get("metadata", {}).get("docSource")
+        canonical = aliases.get(source)
+        if canonical is None and hasattr(catalog, "canonical_key"):
+            canonical = catalog.canonical_key(source) if source else None
+        if canonical not in groups or canonical in seen:
             continue
-        metadata = json.loads(row["metadata"])
-        identity = (metadata.get("message_id") or row["key"], row["digest"])
-        if identity in seen:
-            continue
-        seen.add(identity)
+        seen.add(canonical)
+        locations = sorted(
+            groups[canonical], key=lambda r: (r["key"] != canonical, r["folder"], r["uid"])
+        )
+        row = locations[0]
         hits.append(
             {
                 "text": item["text"][: settings.excerpt_chars],
-                "message_id": row["key"],
+                "message_id": canonical,
                 "excerpt": True,
                 "citation": citation(row),
-                "locations": [
-                    {"folder": r["folder"], "citation": citation(r)} for r in groups[identity]
-                ],
-                "metadata": metadata,
+                "locations": [{"folder": r["folder"], "citation": citation(r)} for r in locations],
+                "metadata": json.loads(row["metadata"]),
                 "untrusted": True,
             }
         )
@@ -99,7 +101,9 @@ def build(catalog, backend, api_key=None, settings=None):
 
         Check before searching older mail. Indexed dates describe only processed messages;
         they are not the mailbox's full date range. Search is relevance-ranked, not exhaustive.
-        Runtime timestamps show the last observation, not a live service heartbeat.
+        Unique messages count content once; folder entries count each membership. The unique
+        expected total is unknown until all selected content is indexed. Runtime timestamps
+        show the last observation, not a live service heartbeat.
         """
         return catalog.coverage()
 

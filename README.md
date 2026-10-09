@@ -22,7 +22,7 @@
 > “What did the contractor say about the delivery date?”<br>
 > “Find the email with the signed agreement attached.”
 
-- **Search across folders** — index all selectable folders, or choose your own.
+- **Search across folders** — index all selectable folders, or choose your own. Folder and label copies share one indexed email.
 - **Find text in attachments** — includes supported PDF and DOCX files.
 - **Keep mail untouched** — no sending, deleting, moving, or marking messages as read.
 - **See where answers came from** — results include subjects, senders, dates, and source citations.
@@ -251,7 +251,7 @@ Ask your assistant:
 | `index_status` | Reports indexing progress, indexed dates, and incomplete folder coverage. | No |
 | `answer_mail` | Generates an answer from selected excerpts, with citations. | Yes |
 
-For extraction tasks, ask the assistant to search first, then call `read_mail` with the result’s `message_id` and follow `next_offset` until it is `null`. Check `index_status` before drawing conclusions about older mail: an incomplete index cannot establish that no older messages exist. Search returns relevance-ranked results, so its hit count is not an exhaustive mailbox count.
+For extraction tasks, ask the assistant to search first, then call `read_mail` with the result’s `message_id` and follow `next_offset` until it is `null`. `index_status` separates unique indexed emails from folder/label entry counts. Check it before drawing conclusions about older mail: an incomplete index cannot establish that no older messages exist. Search returns relevance-ranked results, so its hit count is not an exhaustive mailbox count.
 
 Citations identify messages in your index; they are not clickable Proton Mail links. PDF and DOCX text extraction is supported; scanned images need OCR before their text can be searched.
 

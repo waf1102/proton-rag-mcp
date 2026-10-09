@@ -11,13 +11,21 @@ from pathlib import Path
 from .anything import Anything
 from .config import Settings
 from .mailbox import Mailbox, Snapshot
-from .sync import Catalog, synchronize, synchronize_folder
+from .sync import Catalog, synchronize, synchronize_folder, cleanup_duplicates, collect_orphans
 from .health import check_storage, report_error, DiskLowError
 
 
 def record_progress(catalog, values):
     catalog.update_runtime(last_progress=values)
     logging.info(json.dumps({"event": "sync_progress", **values}))
+
+
+def prepare_batch(settings, catalog, backend, stop):
+    check_storage(settings, catalog)
+    if not stop.is_set():
+        removed = cleanup_duplicates(catalog, backend, settings.batch_size)
+        if removed:
+            logging.info(json.dumps({"event": "duplicates_removed", "documents": removed}))
 
 
 def main():
@@ -42,7 +50,7 @@ def main():
             settings.workspace,
             embedding_timeout=settings.embedding_timeout,
         )
-        catalog = Catalog(settings.state_dir / "catalog.db")
+        catalog = Catalog(settings.state_dir / "catalog.db", writer=True)
         backoff = 2
         while not stop.is_set():
             mailbox = None
@@ -50,6 +58,13 @@ def main():
             try:
                 check_storage(settings, catalog)
                 backend.refresh()
+                collect_orphans(
+                    catalog,
+                    backend,
+                    interrupted_only=True,
+                    stop=stop,
+                    before_each=lambda: check_storage(settings, catalog),
+                )
                 if args.synthetic_dir:
                     files = sorted(args.synthetic_dir.glob("*.eml"))
                     result = synchronize(
@@ -98,7 +113,9 @@ def main():
                                 settings,
                                 stop,
                                 progress=lambda values: record_progress(catalog, values),
-                                before_batch=lambda: check_storage(settings, catalog),
+                                before_batch=lambda: prepare_batch(
+                                    settings, catalog, backend, stop
+                                ),
                                 on_error=lambda error: report_error(
                                     catalog, "message_sync_failed", error
                                 ),
@@ -112,6 +129,14 @@ def main():
                             failed = True
                             report_error(catalog, "folder_sync_failed", error)
                     # Missing folders retain their catalog until an operator explicitly reindexes.
+                    if not failed and not stop.is_set() and catalog.coverage()["coverage_complete"]:
+                        collect_orphans(
+                            catalog,
+                            backend,
+                            stop=stop,
+                            before_each=lambda: check_storage(settings, catalog),
+                            defer_new=True,
+                        )
                 if args.once:
                     raise SystemExit(1 if failed else 0)
                 catalog.update_runtime(state="degraded" if failed else "running")
