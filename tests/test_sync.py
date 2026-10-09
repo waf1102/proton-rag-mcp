@@ -118,7 +118,7 @@ def test_same_uid_in_different_folders_survives_reconciliation(tmp_path):
     raw = b"Subject: hi\nMessage-ID: <same@example>\n\nContent"
     synchronize(catalog, backend, Snapshot("1", {"7": raw}, folder="INBOX"))
     synchronize(catalog, backend, Snapshot("1", {"7": raw}, folder="Folders/Archive"))
-    assert len(catalog.rows()) == 2 and len(backend.docs) == 2
+    assert len(catalog.rows()) == 2 and len(backend.docs) == 1
     synchronize(catalog, backend, Snapshot("1", {}, folder="INBOX"))
     assert len(catalog.rows()) == 1
     assert next(iter(catalog.rows().values()))["folder"] == "Folders/Archive"
@@ -145,6 +145,9 @@ def test_incremental_sync_fetches_new_uids_only(tmp_path):
     assert len(backend.docs) == 2
     box.verify.side_effect = None
     synchronize_folder(catalog, backend, box, "INBOX")
+    from proton_rag.sync import collect_orphans
+
+    collect_orphans(catalog, backend)
     assert len(backend.docs) == 1
 
 
@@ -239,7 +242,7 @@ def test_shutdown_finishes_current_message_and_resumes(tmp_path):
     box.fetch.return_value = b"Subject: stop test\n\nContent"
     result = synchronize_folder(Catalog(tmp_path / "state.db"), backend, box, "INBOX", stop=stop)
     assert result["fetched"] == 2
-    assert len(backend.docs) == 3
+    assert len(backend.docs) == 1 and backend.calls == 1
 
 
 def test_existing_index_backfills_full_text_without_reembedding(tmp_path):
