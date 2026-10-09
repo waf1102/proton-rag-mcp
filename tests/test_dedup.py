@@ -361,8 +361,10 @@ def test_pending_migration_preserves_dispatched_identity(tmp_path, retired_paths
         db.execute("update documents set active=0,paths='[]',phase='prepared'")
         db.execute("update documents set phase='uploading' where key=?", (keys[1],))
         if retired_paths:
-            db.execute("update documents set phase='active', paths=? where key=?",
-                       (json.dumps([keys[0]]), keys[0]))
+            db.execute(
+                "update documents set phase='active', paths=? where key=?",
+                (json.dumps([keys[0]]), keys[0]),
+            )
     catalog = Catalog(path)
     content = catalog.content(digest)
     assert content["key"] == keys[1] and content["phase"] == "uploading"
