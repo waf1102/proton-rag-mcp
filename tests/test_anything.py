@@ -41,3 +41,31 @@ def test_document_listing_is_cached_and_upload_updates_cache():
     backend.ensure(KEY, "body")
     assert backend.find(KEY) == ["custom-documents/one.json"]
     assert backend.request.call_count == 3
+
+
+@pytest.mark.parametrize("suffix", ["", ".txt"])
+def test_recovery_recognizes_raw_text_document_titles(suffix):
+    backend = Anything("http://127.0.0.1:3001", "fixture")
+    backend.request = Mock(
+        side_effect=[
+            {
+                "localFiles": {
+                    "type": "folder",
+                    "name": "documents",
+                    "items": [
+                        {
+                            "type": "folder",
+                            "name": "custom-documents",
+                            "items": [
+                                {"type": "file", "name": "existing.json", "title": KEY + suffix}
+                            ],
+                        }
+                    ],
+                }
+            },
+            {"success": True},
+        ]
+    )
+    assert backend.recover(KEY, "body") == ["custom-documents/existing.json"]
+    assert backend.request.call_count == 2
+    assert backend.request.call_args.args[1].endswith("/update-embeddings")

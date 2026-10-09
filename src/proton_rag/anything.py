@@ -53,8 +53,11 @@ class Anything:
                     folder = "" if node["name"] == "documents" else parent + node["name"] + "/"
                     for child in node.get("items", []):
                         walk(child, folder)
-                elif KEY.fullmatch(node.get("title", "")):
-                    documents.setdefault(node["title"], []).append(parent + node["name"])
+                else:
+                    # The raw-text collector adds a .txt extension to metadata titles.
+                    identity = node.get("title", "").removesuffix(".txt")
+                    if KEY.fullmatch(identity):
+                        documents.setdefault(identity, []).append(parent + node["name"])
 
             walk(tree)
             self._documents = documents
