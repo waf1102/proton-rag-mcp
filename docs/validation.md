@@ -25,3 +25,7 @@ The production implementation passed 41 unit/integration tests, Ruff checks, and
 The deployed MCP launcher exposes search and answer tools and successfully retrieves indexed real mail. Ollama and AnythingLLM restart checks passed. Full initial indexing runs in the background; the bounded validation does not claim the entire mailbox has already been indexed. Docker Compose configuration was validated, but full Docker and Fedora deployments were not exercised on this host.
 
 A live daemon interruption exposed AnythingLLM’s `.txt` title suffix; recovery now accepts that collector format. The interrupted upload was recovered without re-uploading, and the updated daemon stopped and restarted cleanly.
+
+## Full-message reading checks
+
+The full-message reading update passed 49 tests and both SDK interoperability checks. Live validation opened a 37,753-character indexed message across four pages, compared the assembled text with the stored document, exercised search followed by reading, and confirmed coverage remained incomplete. A read-only Bridge date search confirmed historical messages exist outside the indexed date range. No cloud generation or mailbox writes were used.

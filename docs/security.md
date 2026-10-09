@@ -13,3 +13,5 @@ Search and embeddings stay local. `answer_mail` sends the user's question and se
 Mailbox folder names are encoded in citations alongside UIDVALIDITY, UID and a content digest. Citations identify source messages; they do not grant mailbox access. Search results also expose sender, recipients, subject, date and attachment names to the connected client.
 
 Application services bind to host loopback. MCP uses stdio and has no unauthenticated HTTP listener. Logical index deletion removes matching document/vector data; it does not promise forensic erasure from snapshots, backups or old storage pages.
+
+Full extracted message text is cached in the local SQLite catalog for `read_mail`. Protect it like the AnythingLLM document store. Search, reading, and coverage reporting do not make cloud requests or modify Bridge messages. The untrusted label means mail text is data to analyze, not instructions to execute.

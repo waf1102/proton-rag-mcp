@@ -40,6 +40,7 @@ def parse(raw, settings=None):
         return {"text": "", "skipped": ["message_size"]}
     msg = BytesParser(policy=policy.default).parsebytes(raw)
     texts, skipped = [], []
+    truncated = False
     parts = list(msg.walk())
     if len(parts) > settings.max_parts:
         return {"text": "", "skipped": ["part_count"]}
@@ -76,6 +77,7 @@ def parse(raw, settings=None):
             else:
                 skipped.append("unsupported")
                 continue
+            truncated = truncated or len(text) > settings.max_text_chars
             texts.append(text[: settings.max_text_chars])
         except Exception:
             skipped.append("malformed_attachment")
@@ -93,12 +95,15 @@ def parse(raw, settings=None):
         ]
     }
     metadata["attachments"] = [str(p.get_filename()) for p in parts if p.get_filename()]
-    body = "\n\n".join(texts)[: settings.max_text_chars].strip()
+    combined = "\n\n".join(texts)
+    truncated = truncated or len(combined) > settings.max_text_chars
+    body = combined[: settings.max_text_chars].strip()
     headers = "\n".join(f"{k}: {v}" for k, v in metadata.items() if v)
     return {
         "text": (headers + "\n\n" + body).strip() if body else "",
         "metadata": metadata,
         "skipped": skipped,
+        "text_truncated": truncated,
     }
 
 
