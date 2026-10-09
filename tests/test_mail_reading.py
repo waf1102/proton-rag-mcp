@@ -98,3 +98,31 @@ def test_forgetting_message_removes_cached_body(tmp_path):
     catalog.store_text(KEY, "secret", skipped=[], truncated=False)
     catalog.forget(KEY)
     assert catalog.get_text(KEY) is None
+
+
+def test_coverage_excludes_retained_folders_and_old_uidvalidity(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    seed(catalog)
+    catalog.store_text(KEY, "current", [], False)
+    catalog.set_scope(["INBOX"])
+    catalog.observe(Inventory("INBOX", "1", ("7",)))
+    catalog.folder_finished("INBOX", True)
+    catalog.intent(
+        "retained", "Archive", "2", "4", "xyz", False, {"date": "Wed, 1 Jan 2014 12:00:00 +0000"}
+    )
+    catalog.activate("retained", [])
+    catalog.intent(
+        "old", "INBOX", "0", "8", "old", False, {"date": "Thu, 1 Jan 2015 12:00:00 +0000"}
+    )
+    catalog.activate("old", [])
+    catalog.intent("pending", "Archive", "2", "5", "pending", False, {})
+    report = catalog.coverage()
+    assert report["coverage_complete"] is True
+    assert report["folder_entries_expected"] == report["folder_entries_indexed"] == 1
+    assert report["full_text_available"] == 1
+    assert report["pending_entries"] == 0
+    assert report["indexed_date_range"]["earliest"] == "2017-01-02"
+    assert report["retained_entries_outside_scope"] == 2
+    catalog.observe(Inventory("INBOX", "3", ("7",)))
+    assert catalog.coverage()["coverage_complete"] is False
+    assert catalog.coverage()["folder_entries_indexed"] == 0

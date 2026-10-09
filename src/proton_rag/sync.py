@@ -101,11 +101,18 @@ class Catalog:
                 r["folder"]: dict(r) for r in db.execute("SELECT * FROM folder_inventory")
             }
             rows = [dict(r) for r in db.execute("SELECT * FROM documents WHERE active=1")]
-            cached = db.execute(
-                "SELECT count(*) FROM message_text JOIN documents USING(key) WHERE active=1"
-            ).fetchone()[0]
-            pending = db.execute("SELECT count(*) FROM documents WHERE active=0").fetchone()[0]
+            cached_keys = {r[0] for r in db.execute("SELECT key FROM message_text")}
+            pending_rows = [dict(r) for r in db.execute("SELECT * FROM documents WHERE active=0")]
         folders = json.loads(scope[0]) if scope else list(inventories)
+
+        def selected(row):
+            inv = inventories.get(row["folder"])
+            return row["folder"] in folders and (not inv or row["validity"] == inv["validity"])
+
+        retained = len(rows)
+        rows = [r for r in rows if selected(r)]
+        cached = sum(r["key"] in cached_keys for r in rows)
+        pending = sum(selected(r) for r in pending_rows)
         reports = []
         for folder in folders:
             inv = inventories.get(folder)
@@ -139,6 +146,7 @@ class Catalog:
             "folder_entries_indexed": len(rows),
             "full_text_available": cached,
             "pending_entries": pending,
+            "retained_entries_outside_scope": retained - len(rows),
             "folders": reports,
             "indexed_date_range": {"earliest": min(dates), "latest": max(dates)} if dates else None,
             "notice": "Coverage is the last observed inventory, not a guarantee of exhaustive search. "
@@ -172,6 +180,17 @@ class Catalog:
                 query += " WHERE folder=?"
                 params = (folder,)
             return {r["key"]: dict(r) for r in db.execute(query, params)}
+
+    def message(self, key=None, identity=None):
+        with self.connect() as db:
+            if key is not None:
+                row = db.execute("SELECT * FROM documents WHERE key=?", (key,)).fetchone()
+            else:
+                row = db.execute(
+                    "SELECT * FROM documents WHERE folder=? AND validity=? AND uid=? AND digest=?",
+                    identity,
+                ).fetchone()
+            return dict(row) if row else None
 
     def intent(self, key, folder, validity, uid, digest, synthetic, metadata):
         with self.connect() as db:
@@ -299,7 +318,10 @@ def synchronize_folder(catalog, backend, mailbox, folder, settings=None, stop=No
                 key = active[uid]
                 if catalog.get_text(key) is None:
                     raw = mailbox.fetch(uid)
-                    if raw is not None:
+                    if raw is None:
+                        failed += 1
+                        skipped += 1
+                    else:
                         if hashlib.sha256(raw).hexdigest() != existing[key]["digest"]:
                             raise SnapshotError("Message content changed during text backfill")
                         parsed = extract(raw, settings=settings)
