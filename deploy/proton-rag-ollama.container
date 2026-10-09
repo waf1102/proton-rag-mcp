@@ -1,0 +1,25 @@
+[Unit]
+Description=Proton RAG local embeddings only
+
+[Container]
+Image=docker.io/ollama/ollama@sha256:6697852aa235e8fb4e1e77cfab9bbf70d51d3760cb0d266e9fb43cf2b8e44f66
+ContainerName=proton-rag-ollama
+Network=rag-network.network
+NetworkAlias=proton-rag-ollama
+PublishPort=127.0.0.1:11434:11434
+Volume=proton-rag-ollama.volume:/root/.ollama
+Environment=OLLAMA_NUM_PARALLEL=1
+Environment=OLLAMA_MAX_LOADED_MODELS=1
+Environment=OLLAMA_KEEP_ALIVE=2m
+PodmanArgs=--memory=1000m --cpus=1
+HealthCmd=ollama list
+HealthInterval=30s
+HealthStartPeriod=60s
+
+[Service]
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=180
+
+[Install]
+WantedBy=default.target

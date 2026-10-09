@@ -1,0 +1,35 @@
+[Unit]
+Description=Proton RAG AnythingLLM (local retrieval, no cloud credentials)
+After=proton-rag-ollama.service
+Requires=proton-rag-ollama.service
+
+[Container]
+Image=docker.io/mintplexlabs/anythingllm@sha256:5ce7b65badd7de94827846d33fe1b38eff71f86875b7ce88d6e56d2371ec2d6b
+ContainerName=proton-rag-anything
+Network=rag-network.network
+PublishPort=127.0.0.1:3001:3001
+Volume=proton-rag-anything.volume:/app/server/storage
+EnvironmentFile=%h/.config/proton-rag/anything.env
+Environment=STORAGE_DIR=/app/server/storage
+Environment=SERVER_PORT=3001
+Environment=DISABLE_TELEMETRY=true
+Environment=LLM_PROVIDER=ollama
+Environment=OLLAMA_BASE_PATH=http://proton-rag-ollama:11434
+Environment=OLLAMA_MODEL_PREF=nomic-embed-text
+Environment=EMBEDDING_ENGINE=ollama
+Environment=EMBEDDING_BASE_PATH=http://proton-rag-ollama:11434
+Environment=EMBEDDING_MODEL_PREF=nomic-embed-text
+Environment=EMBEDDING_MODEL_MAX_CHUNK_LENGTH=2048
+Environment=VECTOR_DB=lancedb
+PodmanArgs=--memory=1200m --cpus=1
+HealthCmd=curl -f http://127.0.0.1:3001/api/ping
+HealthInterval=30s
+HealthStartPeriod=120s
+
+[Service]
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=180
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,23 @@
+[Unit]
+Description=Proton Mail read-only indexing daemon
+After=proton-rag-anything.service proton-rag-ollama.service
+Requires=proton-rag-anything.service proton-rag-ollama.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/proton-rag/app
+EnvironmentFile=%h/.config/proton-rag/mail.env
+ExecStart=%h/.local/share/proton-rag/app/.venv/bin/proton-rag
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/proton-rag
+MemoryMax=700M
+CPUQuota=100%
+
+[Install]
+WantedBy=default.target
