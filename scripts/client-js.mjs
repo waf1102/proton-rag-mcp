@@ -13,12 +13,18 @@ const transport = new StdioClientTransport({
 try {
   await client.connect(transport);
   const {tools} = await client.listTools();
-  assert.deepEqual(tools.map(t => t.name), ['search_mail']);
+  assert.deepEqual(tools.map(t => t.name), ['search_mail', 'index_status', 'read_mail']);
   assert.equal(tools[0].annotations.readOnlyHint, true);
   const result = await client.callTool({name: 'search_mail', arguments: {query: process.env.RAG_INTEROP_QUERY || 'When does cobalt arrive?'}});
   assert.equal(result.isError, false);
   if (!process.env.RAG_INTEROP_QUERY) assert.match(JSON.stringify(result), /Tuesday/);
   assert.match(JSON.stringify(result), /imap:\/\/\//);
+  const hit = JSON.parse(result.content[0].text).sources[0];
+  const full = await client.callTool({name: 'read_mail', arguments: {message_id: hit.message_id, offset: live ? 0 : 20000}});
+  assert.equal(full.isError, false);
+  if (!live) assert.match(JSON.stringify(full), /ABC123/);
+  const status = await client.callTool({name: 'index_status', arguments: {}});
+  assert.equal(status.isError, false);
   const bad = await client.callTool({name: 'search_mail', arguments: {query: '', limit: 99}});
   assert.equal(bad.isError, true);
   console.log(JSON.stringify({client: 'TypeScript SDK', transport: 'stdio', live, passed: true}));

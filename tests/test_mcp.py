@@ -18,13 +18,21 @@ async def test_python_sdk_client():
             init = await client.initialize()
             assert init.protocolVersion
             tools = (await client.list_tools()).tools
-            assert [t.name for t in tools] == ["search_mail"]
+            assert [t.name for t in tools] == ["search_mail", "index_status", "read_mail"]
             assert tools[0].annotations.readOnlyHint
             result = await client.call_tool("search_mail", {"query": "When does cobalt arrive?"})
             assert not result.isError
             assert (
                 "Tuesday" in result.content[0].text and "imap:///INBOX/" in result.content[0].text
             )
+            hit = json.loads(result.content[0].text)["sources"][0]
+            full = await client.call_tool(
+                "read_mail", {"message_id": hit["message_id"], "offset": 20000}
+            )
+            assert not full.isError
+            assert "ABC123" in full.content[0].text
+            status = await client.call_tool("index_status", {})
+            assert not json.loads(status.content[0].text)["coverage_complete"]
             bad = await client.call_tool("search_mail", {"query": "", "limit": 99})
             assert bad.isError
             assert (await client.call_tool("delete_mail", {})).isError
@@ -126,5 +134,5 @@ async def test_answer_tool_available_with_key_without_ledger():
 
     server = build(Mock(), Mock(), api_key="fixture")
     tools = await server.list_tools()
-    assert {t.name for t in tools} == {"search_mail", "answer_mail"}
+    assert {t.name for t in tools} == {"search_mail", "index_status", "read_mail", "answer_mail"}
     assert "private email" in next(t.description for t in tools if t.name == "answer_mail")

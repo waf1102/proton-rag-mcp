@@ -61,6 +61,18 @@ def main():
                     available = mailbox.folders()
                     folders = list(settings.folders) if settings.folders else available
                     folders = [f for f in folders if f not in settings.excluded_folders]
+                    catalog.set_scope(folders)
+                    # Discover coverage before spending hours ingesting the first large folder.
+                    for folder in folders:
+                        if stop.is_set():
+                            break
+                        try:
+                            if folder not in available:
+                                raise ValueError("Configured folder unavailable")
+                            catalog.observe(mailbox.inventory(folder))
+                        except Exception:
+                            catalog.folder_finished(folder, successful=False)
+                            failed = True
                     for folder in folders:
                         if stop.is_set():
                             break
@@ -81,6 +93,7 @@ def main():
                             failed = failed or result["failed_messages"] > 0
                             logging.info(json.dumps({"event": "folder_sync_ok", **result}))
                         except Exception:
+                            catalog.folder_finished(folder, successful=False)
                             failed = True
                             logging.warning(json.dumps({"event": "folder_sync_failed"}))
                     # Missing folders retain their catalog until an operator explicitly reindexes.

@@ -240,3 +240,23 @@ def test_shutdown_finishes_current_message_and_resumes(tmp_path):
     result = synchronize_folder(Catalog(tmp_path / "state.db"), backend, box, "INBOX", stop=stop)
     assert result["fetched"] == 2
     assert len(backend.docs) == 3
+
+
+def test_existing_index_backfills_full_text_without_reembedding(tmp_path):
+    from unittest.mock import Mock
+    from proton_rag.sync import synchronize_folder
+    from proton_rag.mailbox import Inventory
+
+    catalog = Catalog(tmp_path / "state.db")
+    backend = Backend()
+    raw = b"Subject: Itinerary\n\nFlight details\nConfirmation: ABC123"
+    synchronize(catalog, backend, Snapshot("1", {"7": raw}))
+    key = next(iter(catalog.rows()))
+    with catalog.connect() as db:
+        db.execute("delete from message_text")
+    box = Mock()
+    box.inventory.return_value = Inventory("INBOX", "1", ("7",))
+    box.fetch.return_value = raw
+    synchronize_folder(catalog, backend, box, "INBOX")
+    assert catalog.get_text(key)["text"].endswith("Confirmation: ABC123")
+    assert backend.calls == 1

@@ -69,3 +69,12 @@ def test_valid_pdf_text_extracted():
     result = extract(msg.as_bytes())
     assert "PDF cobalt receipt 42" in result["text"]
     assert not result["skipped"]
+
+
+def test_text_limit_is_explicit_in_extraction_result():
+    from proton_rag.config import Settings
+    from proton_rag.extract import parse
+
+    parsed = parse(b"Subject: long\n\n0123456789", Settings(max_text_chars=5))
+    assert parsed["text_truncated"] is True
+    assert parsed["text"].endswith("01234")

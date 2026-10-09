@@ -64,3 +64,11 @@ For a consistent backup, stop the daemon and AnythingLLM, preserve the catalog a
 ## Optional fixture validation
 
 Fixtures are isolated from production. Use a fresh state directory and `ANYTHING_WORKSPACE=proton-fixtures`; run bootstrap, then `scripts/live-synthetic.py`. That script exercises ingestion/search/deletion and refuses other workspace names. It must not run concurrently with a daemon writing the same catalog.
+
+## Full-message reading and coverage
+
+`search_mail` returns excerpts and a stable `message_id`. `read_mail(message_id, offset=0, length=20000)` opens the complete stored extracted text, including supported attachment text. Follow `next_offset` until null. Each page reports total characters and extraction limitations separately; paging does not discard the remaining text. Raw MIME and binary attachments are not exposed. `text_truncated` and `skipped_parts` identify parser bounds or unsupported parts; null means the old index did not record those details.
+
+The catalog now stores extracted text alongside message metadata. New imports populate it automatically. On existing installations, the daemon backfills missing text from read-only Bridge fetches without re-embedding existing documents. Until backfill completes, reading an uncached message returns an explicit error. Keep the catalog and AnythingLLM volume together in backups; both contain private mail-derived text.
+
+`index_status` reports the last observed inventories of all configured folders, indexed entries, cached text availability, pending entries, and the dates of indexed mail. Counts include folder copies, not unique emails. Search responses include this coverage report. A folder is complete only after stable reconciliation and all its entries are indexed. Coverage is a snapshot and can become stale; it does not turn relevance search into an exhaustive count. Missing results must not be interpreted as proof of absence while indexing is incomplete.

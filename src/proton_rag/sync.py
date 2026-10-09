@@ -4,6 +4,8 @@ import hashlib
 import json
 import sqlite3
 import uuid
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from .extract import extract
 from .mailbox import SnapshotError
 from .config import Settings
@@ -34,6 +36,115 @@ class Catalog:
             self.namespace = db.execute(
                 "SELECT value FROM catalog_settings WHERE name='namespace'"
             ).fetchone()[0]
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS message_text "
+                "(key TEXT PRIMARY KEY, text TEXT, skipped TEXT, truncated INTEGER)"
+            )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS folder_inventory "
+                "(folder TEXT PRIMARY KEY, validity TEXT, total INTEGER, fingerprint TEXT, "
+                "observed_at TEXT, successful INTEGER)"
+            )
+
+    def store_text(self, key, text, skipped, truncated):
+        with self.connect() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO message_text VALUES (?,?,?,?)",
+                (key, text, json.dumps(skipped), None if truncated is None else int(truncated)),
+            )
+
+    def get_text(self, key):
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM message_text WHERE key=?", (key,)).fetchone()
+            return dict(row) if row else None
+
+    def set_scope(self, folders):
+        with self.connect() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO catalog_settings VALUES ('folders',?)",
+                (json.dumps(folders),),
+            )
+
+    def observe(self, inventory):
+        fingerprint = hashlib.sha256(
+            json.dumps(sorted(inventory.uids, key=int)).encode()
+        ).hexdigest()
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO folder_inventory VALUES (?,?,?,?,?,0) "
+                "ON CONFLICT(folder) DO UPDATE SET validity=excluded.validity, "
+                "total=excluded.total,fingerprint=excluded.fingerprint, "
+                "observed_at=excluded.observed_at, successful=CASE WHEN "
+                "folder_inventory.fingerprint=excluded.fingerprint AND "
+                "folder_inventory.validity=excluded.validity THEN folder_inventory.successful "
+                "ELSE 0 END",
+                (
+                    inventory.folder,
+                    inventory.validity,
+                    len(inventory.uids),
+                    fingerprint,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+
+    def folder_finished(self, folder, successful):
+        with self.connect() as db:
+            db.execute(
+                "UPDATE folder_inventory SET successful=? WHERE folder=?",
+                (int(successful), folder),
+            )
+
+    def coverage(self):
+        with self.connect() as db:
+            scope = db.execute("SELECT value FROM catalog_settings WHERE name='folders'").fetchone()
+            inventories = {
+                r["folder"]: dict(r) for r in db.execute("SELECT * FROM folder_inventory")
+            }
+            rows = [dict(r) for r in db.execute("SELECT * FROM documents WHERE active=1")]
+            cached = db.execute(
+                "SELECT count(*) FROM message_text JOIN documents USING(key) WHERE active=1"
+            ).fetchone()[0]
+            pending = db.execute("SELECT count(*) FROM documents WHERE active=0").fetchone()[0]
+        folders = json.loads(scope[0]) if scope else list(inventories)
+        reports = []
+        for folder in folders:
+            inv = inventories.get(folder)
+            count = sum(
+                r["folder"] == folder and (not inv or r["validity"] == inv["validity"])
+                for r in rows
+            )
+            reports.append(
+                {
+                    "folder": folder,
+                    "expected": inv["total"] if inv else None,
+                    "indexed": count,
+                    "last_inventory_at": inv["observed_at"] if inv else None,
+                    "complete": bool(inv and inv["successful"] and count == inv["total"]),
+                }
+            )
+        dates = []
+        for row in rows:
+            try:
+                dates.append(
+                    parsedate_to_datetime(json.loads(row["metadata"]).get("date", ""))
+                    .date()
+                    .isoformat()
+                )
+            except (ValueError, TypeError, OverflowError):
+                pass
+        known = bool(scope) and all(r["expected"] is not None for r in reports)
+        return {
+            "coverage_complete": known and all(r["complete"] for r in reports),
+            "folder_entries_expected": sum(r["expected"] for r in reports) if known else None,
+            "folder_entries_indexed": len(rows),
+            "full_text_available": cached,
+            "pending_entries": pending,
+            "folders": reports,
+            "indexed_date_range": {"earliest": min(dates), "latest": max(dates)} if dates else None,
+            "notice": "Coverage is the last observed inventory, not a guarantee of exhaustive search. "
+            "Folder counts include copies. Missing results do not prove that mail does not exist; "
+            "older mail may still be unindexed. Use read_mail to open search results.",
+        }
 
     def bind_workspace(self, workspace):
         with self.connect() as db:
@@ -86,6 +197,7 @@ class Catalog:
 
     def forget(self, key):
         with self.connect() as db:
+            db.execute("DELETE FROM message_text WHERE key=?", (key,))
             db.execute("DELETE FROM documents WHERE key=?", (key,))
 
 
@@ -101,6 +213,7 @@ def _ingest(catalog, backend, folder, validity, uid, raw, existing, synthetic, s
     if set(parsed["skipped"]) & {"parse_failed", "parse_timeout_or_resource_limit"}:
         raise SnapshotError("Parser failed; preserve prior retrieval data")
     catalog.intent(key, folder, validity, uid, digest, synthetic, parsed.get("metadata", {}))
+    catalog.store_text(key, parsed["text"], parsed["skipped"], parsed.get("text_truncated", False))
     ingest = (
         backend.recover
         if existing.get(key, {}).get("phase") == "uploading" and hasattr(backend, "recover")
@@ -167,6 +280,7 @@ def synchronize_folder(catalog, backend, mailbox, folder, settings=None, stop=No
     if hasattr(backend, "workspace"):
         catalog.bind_workspace(backend.workspace)
     inventory = mailbox.inventory(folder)
+    catalog.observe(inventory)
     existing = catalog.rows(folder)
     active = {
         r["uid"]: key
@@ -182,6 +296,25 @@ def synchronize_folder(catalog, backend, mailbox, folder, settings=None, stop=No
             if stop and stop.is_set():
                 raise SnapshotError("Synchronization interrupted")
             if uid in active:
+                key = active[uid]
+                if catalog.get_text(key) is None:
+                    raw = mailbox.fetch(uid)
+                    if raw is not None:
+                        if hashlib.sha256(raw).hexdigest() != existing[key]["digest"]:
+                            raise SnapshotError("Message content changed during text backfill")
+                        parsed = extract(raw, settings=settings)
+                        if set(parsed["skipped"]) & {
+                            "parse_failed",
+                            "parse_timeout_or_resource_limit",
+                        }:
+                            failed += 1
+                        else:
+                            catalog.store_text(
+                                key,
+                                parsed["text"],
+                                parsed["skipped"],
+                                parsed.get("text_truncated", False),
+                            )
                 keep.add(active[uid])
                 continue
             raw = mailbox.fetch(uid)
@@ -224,6 +357,7 @@ def synchronize_folder(catalog, backend, mailbox, folder, settings=None, stop=No
     mailbox.verify(inventory)
     if not failed:
         _remove(catalog, backend, existing, keep)
+    catalog.folder_finished(folder, successful=not failed)
     return {
         "messages": len(inventory.uids),
         "fetched": fetched,
