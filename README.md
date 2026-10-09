@@ -51,7 +51,7 @@ Indexing and retrieval run on your machine. Search results are then shared with 
 | **Python 3.11+ and uv** | Install [Python](https://www.python.org/downloads/) and [uv](https://docs.astral.sh/uv/getting-started/installation/). |
 | **Docker Engine + Compose v2** | Follow [Docker's installation guide](https://docs.docker.com/engine/install/). Your user must be able to run `docker compose`. [Rootless Podman](docs/podman.md) is also supported. |
 | **Git, Bash, and OpenSSL** | Used by the setup commands below. |
-| **Memory and storage** | Budget roughly **3 GiB of available RAM** for this stack, plus disk space for images, the embedding model, and your mail index. Storage grows with mailbox size. |
+| **Memory and storage** | Budget roughly **3 GiB of available RAM** and keep **at least 3 GiB of disk space free**, plus storage for images, the embedding model, and your mail index. Storage grows with mailbox size; [periodic maintenance](docs/operations.md#database-maintenance) bounds database history. |
 | **An MCP client** | Claude Code, Cursor, VS Code with Copilot, or another client that can launch a local stdio server. |
 
 **Optional:** an [OpenRouter API key](https://openrouter.ai/settings/keys) with available credits for `answer_mail`. Search works without one. A GPU and a local chat model are not required.

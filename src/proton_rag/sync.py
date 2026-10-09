@@ -94,9 +94,22 @@ class Catalog:
                 (int(successful), folder),
             )
 
+    def update_runtime(self, **values):
+        with self.connect() as db:
+            row = db.execute("SELECT value FROM catalog_settings WHERE name='runtime'").fetchone()
+            runtime = json.loads(row[0]) if row else {}
+            runtime.update(values, updated_at=datetime.now(timezone.utc).isoformat())
+            db.execute(
+                "INSERT OR REPLACE INTO catalog_settings VALUES ('runtime',?)",
+                (json.dumps(runtime),),
+            )
+
     def coverage(self):
         with self.connect() as db:
             scope = db.execute("SELECT value FROM catalog_settings WHERE name='folders'").fetchone()
+            runtime = db.execute(
+                "SELECT value FROM catalog_settings WHERE name='runtime'"
+            ).fetchone()
             inventories = {
                 r["folder"]: dict(r) for r in db.execute("SELECT * FROM folder_inventory")
             }
@@ -141,6 +154,7 @@ class Catalog:
                 pass
         known = bool(scope) and all(r["expected"] is not None for r in reports)
         return {
+            "runtime": json.loads(runtime[0]) if runtime else {"state": "unknown"},
             "coverage_complete": known and all(r["complete"] for r in reports),
             "folder_entries_expected": sum(r["expected"] for r in reports) if known else None,
             "folder_entries_indexed": len(rows),
@@ -293,7 +307,17 @@ def synchronize(catalog, backend, snapshot, synthetic=False):
     return {"messages": len(keep), "skipped_parts": skipped}
 
 
-def synchronize_folder(catalog, backend, mailbox, folder, settings=None, stop=None, progress=None):
+def synchronize_folder(
+    catalog,
+    backend,
+    mailbox,
+    folder,
+    settings=None,
+    stop=None,
+    progress=None,
+    before_batch=None,
+    on_error=None,
+):
     settings = settings or Settings()
     _dataset(catalog, False)
     if hasattr(backend, "workspace"):
@@ -309,6 +333,8 @@ def synchronize_folder(catalog, backend, mailbox, folder, settings=None, stop=No
     keep, skipped, fetched, failed = set(), 0, 0, 0
     ordered = tuple(sorted(inventory.uids, key=int, reverse=True))
     for offset in range(0, len(ordered), settings.batch_size):
+        if before_batch:
+            before_batch()
         if stop and stop.is_set():
             raise SnapshotError("Synchronization interrupted")
         for uid in ordered[offset : offset + settings.batch_size]:
@@ -361,8 +387,10 @@ def synchronize_folder(catalog, backend, mailbox, folder, settings=None, stop=No
                     False,
                     settings,
                 )
-            except (SnapshotError, PendingUploadError):
+            except (SnapshotError, PendingUploadError) as error:
                 failed += 1
+                if on_error:
+                    on_error(error)
                 continue
             keep.add(key)
             skipped += count
@@ -377,6 +405,8 @@ def synchronize_folder(catalog, backend, mailbox, folder, settings=None, stop=No
                 }
             )
     mailbox.verify(inventory)
+    if before_batch:
+        before_batch()
     if not failed:
         _remove(catalog, backend, existing, keep)
     catalog.folder_finished(folder, successful=not failed)

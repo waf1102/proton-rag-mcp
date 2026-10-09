@@ -17,6 +17,10 @@ class Settings:
     excluded_folders: tuple[str, ...] = ()
     poll_seconds: int = 30
     batch_size: int = 25
+    embedding_timeout: int = 300
+    min_free_bytes: int = 2 * 1024**3
+    warn_free_bytes: int = 3 * 1024**3
+    storage_paths: tuple[str, ...] = ()
     max_message_bytes: int = 32 * 1024 * 1024
     parser_timeout: int = 15
     max_text_chars: int = 200_000
@@ -72,4 +76,6 @@ class Settings:
             raise ValueError("Default retrieval limits must not exceed RAG_SEARCH_MAX")
         if result.imap_port > 65535:
             raise ValueError("Invalid IMAP port")
+        if result.warn_free_bytes < result.min_free_bytes:
+            raise ValueError("The disk warning limit must not be below the pause limit")
         return result

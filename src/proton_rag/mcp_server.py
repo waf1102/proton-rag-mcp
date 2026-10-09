@@ -95,10 +95,11 @@ def build(catalog, backend, api_key=None, settings=None):
 
     @server.tool(annotations=read)
     async def index_status() -> dict:
-        """Report indexed dates, folder counts and incomplete coverage of the last inventory.
+        """Report indexed dates, folder counts, ingestion state and redacted failure reasons.
 
         Check before searching older mail. Indexed dates describe only processed messages;
         they are not the mailbox's full date range. Search is relevance-ranked, not exhaustive.
+        Runtime timestamps show the last observation, not a live service heartbeat.
         """
         return catalog.coverage()
 

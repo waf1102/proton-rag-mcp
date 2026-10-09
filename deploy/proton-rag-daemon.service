@@ -10,6 +10,7 @@ EnvironmentFile=%h/.config/proton-rag/mail.env
 ExecStart=%h/.local/share/proton-rag/app/.venv/bin/proton-rag
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=420
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
