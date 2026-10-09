@@ -20,6 +20,8 @@ Do not put email content, credentials, or provider response bodies in published 
 
 ## Recorded validation (2026-10-08)
 
-The production implementation passed 39 unit/integration tests, Ruff checks, and the TypeScript MCP interoperability test. Live validation on the Podman host verified TLS, inventoried 12 Bridge folders, indexed read-only samples from all 11 non-empty folders, and confirmed mailbox flags were unchanged. Both Python and TypeScript SDK clients retrieved cited results. Two OpenRouter answer checks passed with citations matching retrieved sources.
+The production implementation passed 41 unit/integration tests, Ruff checks, and the TypeScript MCP interoperability test. Live validation on the Podman host verified TLS, inventoried 12 Bridge folders, indexed read-only samples from all 11 non-empty folders, and confirmed mailbox flags were unchanged. Both Python and TypeScript SDK clients retrieved cited results. Two OpenRouter answer checks passed with citations matching retrieved sources.
 
 The deployed MCP launcher exposes search and answer tools and successfully retrieves indexed real mail. Ollama and AnythingLLM restart checks passed. Full initial indexing runs in the background; the bounded validation does not claim the entire mailbox has already been indexed. Docker Compose configuration was validated, but full Docker and Fedora deployments were not exercised on this host.
+
+A live daemon interruption exposed AnythingLLM’s `.txt` title suffix; recovery now accepts that collector format. The interrupted upload was recovered without re-uploading, and the updated daemon stopped and restarted cleanly.
