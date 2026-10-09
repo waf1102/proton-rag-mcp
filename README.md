@@ -92,7 +92,7 @@ docker compose up -d --wait
 cd ..
 ```
 
-Open **[AnythingLLM at localhost:3001](http://127.0.0.1:3001)**, complete setup, and create an API key under **Settings → Developer API**. Save that key for the next step. Keep Ollama / `nomic-embed-text` as the embedding provider and model configured by Compose.
+Open **[AnythingLLM at localhost:3001](http://127.0.0.1:3001)**, sign in using the `AUTH_TOKEN` value from `~/.config/proton-rag/anything.env` if prompted for a password, and complete setup. Create an API key under **Settings → Developer API**. Save that key for the next step. Keep Ollama / `nomic-embed-text` as the embedding provider and model configured by Compose.
 
 Prefer Podman? Use the [Podman guide](docs/podman.md) for this step, then continue below.
 
