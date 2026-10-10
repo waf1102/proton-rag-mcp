@@ -7,7 +7,7 @@ const transport = new StdioClientTransport({
   command: '.venv/bin/python',
   args: live ? ['-m', 'proton_rag.mcp_server'] : ['tests/fixture_server.py'],
   env: Object.fromEntries(Object.entries(process.env).filter(([k]) =>
-    ['PATH', 'RAG_STATE_DIR', 'ANYTHING_URL', 'ANYTHING_API_KEY', 'ANYTHING_WORKSPACE'].includes(k))),
+    ['PATH', 'RAG_STATE_DIR', 'QDRANT_URL', 'QDRANT_API_KEY', 'QDRANT_COLLECTION', 'OLLAMA_URL'].includes(k))),
   stderr: 'pipe',
 });
 try {

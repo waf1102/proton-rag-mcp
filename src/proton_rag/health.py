@@ -7,7 +7,7 @@ import shutil
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
-from .anything import IndexError, PendingUploadError
+from .index import IndexFailure, PendingIndexError
 from .mailbox import SnapshotError
 
 
@@ -15,10 +15,25 @@ class DiskLowError(RuntimeError):
     pass
 
 
+def require_space(settings, *additional, extra=0):
+    """Check the floor plus projected writes without changing a source catalog."""
+    paths = [
+        settings.state_dir,
+        *(Path(p).expanduser() for p in settings.storage_paths),
+        *additional,
+    ]
+    for path in paths:
+        path = Path(path)
+        while not path.exists():
+            path = path.parent
+        if shutil.disk_usage(path).free < settings.min_free_bytes + extra:
+            raise DiskLowError("Operation paused until disk space recovers")
+
+
 def diagnostic(error):
-    if isinstance(error, IndexError):
+    if isinstance(error, IndexFailure):
         return error.diagnostic
-    if isinstance(error, PendingUploadError):
+    if isinstance(error, PendingIndexError):
         return {"code": "upload_reconciliation", "operation": "upload"}
     if isinstance(error, DiskLowError):
         return {"code": "low_disk", "operation": "storage"}

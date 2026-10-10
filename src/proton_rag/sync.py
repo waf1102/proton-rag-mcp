@@ -5,7 +5,7 @@ import json
 from .extract import extract
 from .mailbox import SnapshotError
 from .config import Settings
-from .anything import PendingUploadError
+from .index import PendingIndexError
 
 
 from .catalog import Catalog as Catalog
@@ -21,7 +21,7 @@ def _ingest(catalog, backend, folder, validity, uid, raw, existing, synthetic, s
         return key, 0
     content = catalog.content(digest, synthetic)
     if content and content["phase"] == "deleting":
-        raise PendingUploadError("Pending deletion requires reconciliation")
+        raise PendingIndexError("Pending deletion requires reconciliation")
     cached = catalog.get_text(content["key"]) if content else None
     if content and cached is not None:
         catalog.intent(
@@ -53,9 +53,7 @@ def _ingest(catalog, backend, folder, validity, uid, raw, existing, synthetic, s
         if content["phase"] == "uploading" and hasattr(backend, "recover")
         else backend.ensure
     )
-    paths = (
-        ingest(canonical, text, before_upload=lambda: catalog.dispatched(canonical)) if text else []
-    )
+    paths = ingest(canonical, text, before_upload=lambda: catalog.dispatched(canonical))
     catalog.activate(key, paths)
     return key, len(skipped)
 
@@ -224,7 +222,7 @@ def synchronize_folder(
                     False,
                     settings,
                 )
-            except (SnapshotError, PendingUploadError) as error:
+            except (SnapshotError, PendingIndexError) as error:
                 failed += 1
                 if on_error:
                     on_error(error)

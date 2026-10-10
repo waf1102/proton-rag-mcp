@@ -1,0 +1,21 @@
+[Unit]
+Description=Proton RAG local Qdrant retrieval
+
+[Container]
+Image=docker.io/qdrant/qdrant@sha256:0e8273b9130ca3b0dd9dcfaa8f55342066711f8aaeb2aa072e53344c42ecf57f
+ContainerName=proton-rag-qdrant
+Network=rag-network.network
+PublishPort=127.0.0.1:6333:6333
+Volume=proton-rag-qdrant.volume:/qdrant/storage
+EnvironmentFile=%h/.config/proton-rag/qdrant.env
+Environment=QDRANT__TELEMETRY_DISABLED=true
+Environment=QDRANT__STORAGE__SNAPSHOTS_PATH=/qdrant/storage/snapshots
+PodmanArgs=--memory=768m --cpus=1
+
+[Service]
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=180
+
+[Install]
+WantedBy=default.target

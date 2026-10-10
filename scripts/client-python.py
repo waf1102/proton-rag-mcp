@@ -12,7 +12,15 @@ async def run():
     env = {
         k: v
         for k, v in os.environ.items()
-        if k in ("PATH", "RAG_STATE_DIR", "ANYTHING_URL", "ANYTHING_API_KEY", "ANYTHING_WORKSPACE")
+        if k
+        in (
+            "PATH",
+            "RAG_STATE_DIR",
+            "QDRANT_URL",
+            "QDRANT_API_KEY",
+            "QDRANT_COLLECTION",
+            "OLLAMA_URL",
+        )
     }
     async with stdio_client(
         StdioServerParameters(command=sys.executable, args=["-m", "proton_rag.mcp_server"], env=env)

@@ -33,8 +33,10 @@
 ```mermaid
 flowchart LR
     Mail[Proton Mail Bridge] -->|Read-only IMAP| Index[Python indexer]
-    Index --> Store[AnythingLLM]
-    Store <-->|Local embeddings| Ollama[Ollama]
+    Index --> Store[Qdrant hybrid retrieval]
+    Index <-->|Local embeddings| Ollama[Ollama]
+    Index --> Catalog[SQLite catalog and cached text]
+    Server --> Catalog
     Assistant[Your AI assistant] <-->|MCP| Server[MCP server]
     Server -->|Search| Store
     Server -.->|Optional answers| Router[OpenRouter]
@@ -51,14 +53,14 @@ Indexing and retrieval run on your machine. Search results are then shared with 
 | **Python 3.11+ and uv** | Install [Python](https://www.python.org/downloads/) and [uv](https://docs.astral.sh/uv/getting-started/installation/). |
 | **Docker Engine + Compose v2** | Follow [Docker's installation guide](https://docs.docker.com/engine/install/). Your user must be able to run `docker compose`. [Rootless Podman](docs/podman.md) is also supported. |
 | **Git, Bash, and OpenSSL** | Used by the setup commands below. |
-| **Memory and storage** | Budget roughly **3 GiB of available RAM** and keep **at least 3 GiB of disk space free**, plus storage for images, the embedding model, and your mail index. Storage grows with mailbox size; [periodic maintenance](docs/operations.md#database-maintenance) bounds database history. |
+| **Memory and storage** | Budget roughly **3 GiB of available RAM** and keep **at least 3 GiB of disk space free**, plus storage for images, the embedding model, and your mail index. Storage grows with mailbox size; keep room for [paired backups](docs/operations.md#backups-and-restore-verification). |
 | **An MCP client** | Claude Code, Cursor, VS Code with Copilot, or another client that can launch a local stdio server. |
 
 **Optional:** an [OpenRouter API key](https://openrouter.ai/settings/keys) with available credits for `answer_mail`. Search works without one. A GPU and a local chat model are not required.
 
 ## Get started
 
-Docker Compose runs **AnythingLLM and Ollama**. The Python indexer and MCP server run on the host alongside Bridge.
+Docker Compose runs **Qdrant 1.19.2 and Ollama**. The Python indexer and MCP server run on the host alongside Bridge.
 
 ### 1. Download and install
 
@@ -70,29 +72,27 @@ uv sync --locked
 
 ### 2. Start the local index
 
-Create AnythingLLM's private service secrets. This preserves the file if you already have one:
+Create a private Qdrant API key, preserving any existing file:
 
 ```bash
 umask 077
 mkdir -p "$HOME/.config/proton-rag"
-if [ ! -f "$HOME/.config/proton-rag/anything.env" ]; then
-  printf 'AUTH_TOKEN=%s\nJWT_SECRET=%s\n' \
-    "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" \
-    > "$HOME/.config/proton-rag/anything.env"
+if [ ! -f "$HOME/.config/proton-rag/qdrant.env" ]; then
+  printf 'QDRANT__SERVICE__API_KEY=%s\n' "$(openssl rand -hex 32)" \
+    > "$HOME/.config/proton-rag/qdrant.env"
 fi
 ```
 
-Start the services and download the embedding model:
+Start services and download the embedding model:
 
 ```bash
 cd deploy
-docker compose up -d --wait ollama
+docker compose up -d ollama qdrant
 docker compose exec ollama ollama pull nomic-embed-text
-docker compose up -d --wait
 cd ..
 ```
 
-Open **[AnythingLLM at localhost:3001](http://127.0.0.1:3001)**, sign in using the `AUTH_TOKEN` value from `~/.config/proton-rag/anything.env` if prompted for a password, and complete setup. Create an API key under **Settings → Developer API**. Save that key for the next step. Keep Ollama / `nomic-embed-text` as the embedding provider and model configured by Compose.
+Qdrant listens only at `http://127.0.0.1:6333`. Copy the key from your private `qdrant.env` file into the `QDRANT_API_KEY` setting below. The application creates a collection for a fresh catalog and verifies its ownership and embedding profile on subsequent starts. Existing catalogs need the [migration procedure](docs/operations-qdrant-migration.md).
 
 Prefer Podman? Use the [Podman guide](docs/podman.md) for this step, then continue below.
 
@@ -106,9 +106,9 @@ Create `~/.config/proton-rag/mail.env` in your editor with the following values.
 
 ```bash
 RAG_STATE_DIR='/home/YOUR_USER/.local/share/proton-rag/mail'
-ANYTHING_URL='http://127.0.0.1:3001'
-ANYTHING_WORKSPACE='proton-mail'
-ANYTHING_API_KEY='YOUR_ANYTHINGLLM_API_KEY'
+QDRANT_URL='http://127.0.0.1:6333'
+QDRANT_COLLECTION='proton-mail'
+QDRANT_API_KEY='YOUR_QDRANT_API_KEY'
 IMAP_HOST='127.0.0.1'
 IMAP_PORT='1143'
 IMAP_CA_FILE='/home/YOUR_USER/.config/proton-rag/bridge-ca.pem'
@@ -130,7 +130,6 @@ set +a
 From the repository root, in the same terminal:
 
 ```bash
-uv run python scripts/bootstrap-workspace.py
 uv run proton-rag
 ```
 
@@ -152,7 +151,7 @@ Use your exact Bridge folder names. If both settings are present, exclusions tak
 
 The client launches the MCP server automatically. **Keep the indexer running separately** to pick up new mail.
 
-Choose a client below. Replace `/home/YOUR_USER/proton-rag-mcp` with your checkout's absolute path and use the same API key, state directory, and workspace as above. Run `pwd` from the repository root to find your checkout path. Do not use `~` in JSON paths.
+Choose a client below. Replace `/home/YOUR_USER/proton-rag-mcp` with your checkout's absolute path and use the same API key, state directory, and collection as above. Run `pwd` from the repository root to find your checkout path. Do not use `~` in JSON paths.
 
 <details>
 <summary><strong>Claude Code</strong></summary>
@@ -166,9 +165,9 @@ source "$HOME/.config/proton-rag/mail.env"
 set +a
 
 claude mcp add --scope user \
-  --env ANYTHING_API_KEY="$ANYTHING_API_KEY" \
-  --env ANYTHING_URL="$ANYTHING_URL" \
-  --env ANYTHING_WORKSPACE="$ANYTHING_WORKSPACE" \
+  --env QDRANT_API_KEY="$QDRANT_API_KEY" \
+  --env QDRANT_URL="$QDRANT_URL" \
+  --env QDRANT_COLLECTION="$QDRANT_COLLECTION" \
   --env RAG_STATE_DIR="$RAG_STATE_DIR" \
   --transport stdio proton-mail -- "$PWD/.venv/bin/proton-rag-mcp"
 ```
@@ -188,9 +187,9 @@ Add this server to your personal `~/.cursor/mcp.json` file. If the file already 
     "proton-mail": {
       "command": "/home/YOUR_USER/proton-rag-mcp/.venv/bin/proton-rag-mcp",
       "env": {
-        "ANYTHING_API_KEY": "YOUR_ANYTHINGLLM_API_KEY",
-        "ANYTHING_URL": "http://127.0.0.1:3001",
-        "ANYTHING_WORKSPACE": "proton-mail",
+        "QDRANT_API_KEY": "YOUR_QDRANT_API_KEY",
+        "QDRANT_URL": "http://127.0.0.1:6333",
+        "QDRANT_COLLECTION": "proton-mail",
         "RAG_STATE_DIR": "/home/YOUR_USER/.local/share/proton-rag/mail"
       }
     }
@@ -214,25 +213,25 @@ Open the Command Palette and run **MCP: Open User Configuration**. Add this serv
       "type": "stdio",
       "command": "/home/YOUR_USER/proton-rag-mcp/.venv/bin/proton-rag-mcp",
       "env": {
-        "ANYTHING_API_KEY": "${input:proton-anything-key}",
-        "ANYTHING_URL": "http://127.0.0.1:3001",
-        "ANYTHING_WORKSPACE": "proton-mail",
+        "QDRANT_API_KEY": "${input:proton-qdrant-key}",
+        "QDRANT_URL": "http://127.0.0.1:6333",
+        "QDRANT_COLLECTION": "proton-mail",
         "RAG_STATE_DIR": "/home/YOUR_USER/.local/share/proton-rag/mail"
       }
     }
   },
   "inputs": [
     {
-      "id": "proton-anything-key",
+      "id": "proton-qdrant-key",
       "type": "promptString",
-      "description": "AnythingLLM API key for Proton Mail",
+      "description": "Qdrant API key for Proton Mail",
       "password": true
     }
   ]
 }
 ```
 
-Start the server from the configuration editor, enter your AnythingLLM key when prompted, and enable its tools in Copilot Chat's Agent mode. [VS Code MCP documentation](https://code.visualstudio.com/docs/agent-customization/mcp-servers).
+Start the server from the configuration editor, enter your Qdrant key when prompted, and enable its tools in Copilot Chat's Agent mode. [VS Code MCP documentation](https://code.visualstudio.com/docs/agent-customization/mcp-servers).
 
 </details>
 
@@ -273,10 +272,12 @@ Restart the MCP server in your client. `answer_mail` will appear alongside `sear
 | Guide | What you'll find |
 | --- | --- |
 | [Configuration & operations](docs/operations.md) | All environment variables, background services, upgrades, and backups. |
+| [Migration](docs/operations-qdrant-migration.md) | Frozen export, resumable import, cutover and rollback. |
 | [Podman setup](docs/podman.md) | Rootless containers with systemd Quadlet. |
 | [Privacy & security](docs/security.md) | Mail access, local storage, and what leaves your machine. |
 | [Fedora deployment](docs/fedora.md) | Fedora-specific setup and migration notes. |
 | [Validation](docs/validation.md) | Test commands, live checks, and deployment coverage. |
+| [Completed Qdrant migration](docs/qdrant-migration-validation.md) | Verified transfer counts, live cutover, recovery rehearsal, and remaining indexing. |
 
 ## Contributing
 
