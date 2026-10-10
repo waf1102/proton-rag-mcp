@@ -259,3 +259,35 @@ def test_recovery_rejects_different_cached_text(tmp_path):
     backend.ensure(key, "synthetic cobalt")
     with pytest.raises(ValueError, match="content"):
         backend.recover(key, "changed text")
+
+
+def test_partial_write_restart_replays_without_embedding_variation(tmp_path):
+    catalog, state, backend, service = setup_index(tmp_path)
+    key = "proton-mail-" + "a" * 64
+    text = "Cobalt fixture. " * 5000
+    original = service.__call__
+    writes = 0
+
+    def fail_second(request):
+        nonlocal writes
+        if request.method == "PUT" and request.url.path.endswith("/points"):
+            writes += 1
+            if writes == 2:
+                return httpx.Response(503)
+        return original(request)
+
+    backend.client = httpx.Client(transport=httpx.MockTransport(fail_second))
+    with pytest.raises(IndexFailure):
+        backend.ensure(key, text)
+    changed = Embedder()
+    changed.embed_documents = lambda texts: [[1.0, 1e-8] + [0.0] * 766 for t in texts]
+    reopened = QdrantIndex(
+        backend.settings,
+        Catalog(catalog.path),
+        IndexState(catalog, backend.workspace, Embedder.profile),
+        changed,
+        client=httpx.Client(transport=httpx.MockTransport(service)),
+    )
+    reopened.recover(key, text)
+    assert reopened.state.ready(key)
+    assert len(service.points) == len(reopened.state.entry(key)["points"])

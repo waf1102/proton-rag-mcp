@@ -43,6 +43,9 @@ class IndexState:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS index_messages (key TEXT PRIMARY KEY, text_hash TEXT, points TEXT, phase TEXT, revision TEXT)"
             )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS index_replay (key TEXT PRIMARY KEY, points TEXT)"
+            )
             saved = db.execute("SELECT binding,published FROM index_binding WHERE id=1").fetchone()
             if saved:
                 if json.loads(saved["binding"]) != self.binding:
@@ -85,7 +88,7 @@ class IndexState:
         value = self.entry(key)
         return bool(value and value["phase"] == "ready")
 
-    def prepare(self, key, text, points):
+    def prepare(self, key, text, points, *, replay=None):
         digest = text_hash(text)
         revision = text_hash(json.dumps(points, sort_keys=True))
         old = self.entry(key)
@@ -96,15 +99,26 @@ class IndexState:
                 "INSERT OR IGNORE INTO index_messages VALUES (?,?,?,'pending',?)",
                 (key, digest, json.dumps(points, sort_keys=True), revision),
             )
+            if replay is not None:
+                db.execute(
+                    "INSERT OR IGNORE INTO index_replay VALUES (?,?)", (key, json.dumps(replay))
+                )
         return revision
+
+    def replay(self, key):
+        with self.catalog.connect() as db:
+            row = db.execute("SELECT points FROM index_replay WHERE key=?", (key,)).fetchone()
+            return json.loads(row[0]) if row else None
 
     def finish(self, key):
         with self.catalog.connect() as db:
             db.execute("UPDATE index_messages SET phase='ready' WHERE key=?", (key,))
+            db.execute("DELETE FROM index_replay WHERE key=?", (key,))
 
     def forget(self, key):
         with self.catalog.connect() as db:
             db.execute("DELETE FROM index_messages WHERE key=?", (key,))
+            db.execute("DELETE FROM index_replay WHERE key=?", (key,))
 
     def status(self):
         with self.catalog.connect() as db:

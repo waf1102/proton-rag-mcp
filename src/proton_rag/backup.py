@@ -17,8 +17,10 @@ from .catalog import Catalog
 from .embeddings import EmbeddingProfile, Ollama
 from .index import IndexFailure
 from .index_state import IndexState
-from .migration import clone_catalog, verify_target
-from .migration_report import readonly, save_report
+from .migration import clone_catalog
+from .migration_report import fingerprint, readonly, save_report
+from .health import require_space
+from .index_state import text_hash
 from .qdrant import QdrantIndex
 from .config import Settings
 
@@ -135,6 +137,10 @@ def restore_check(settings, backup_dir, target_state, collection):
     if target.exists() or collection == manifest["binding"]["collection"]:
         raise ValueError("Restore verification requires a fresh state and distinct collection")
     settings = replace(settings, state_dir=target, workspace=collection)
+    estimate = (Path(backup_dir) / "catalog.db").stat().st_size * 2 + (
+        Path(backup_dir) / "qdrant.snapshot"
+    ).stat().st_size * 2
+    require_space(settings, extra=estimate)
     profile = EmbeddingProfile(**manifest["binding"]["profile"])
     target.mkdir(mode=0o700, parents=True)
     clone_catalog(Path(backup_dir) / "catalog.db", target / "catalog.db")
@@ -161,6 +167,7 @@ def restore_check(settings, backup_dir, target_state, collection):
     else:
         raise ValueError("Restore collection already exists")
     try:
+        require_space(settings, extra=estimate)
         with (Path(backup_dir) / "qdrant.snapshot").open("rb") as file:
             response = backend.client.post(
                 backend.url + "/snapshots/upload?priority=snapshot",
@@ -177,10 +184,42 @@ def restore_check(settings, backup_dir, target_state, collection):
         raise ValueError("Restored snapshot has a different binding")
     backend.request("PATCH", "", {"metadata": {"proton_rag_binding": binding}})
     backend.bootstrap(create=False)
-    report = verify_target(Path(backup_dir) / "catalog.db", catalog.path, backend)
+    report = verify_restore(Path(backup_dir) / "catalog.db", catalog, backend)
     state.publish()
     save_report(target / "restore-verification.json", report)
     return report
+
+
+def verify_restore(source, catalog, backend):
+    """A consistent recovery pair can contain unfinished work; keep it unfinished."""
+    if fingerprint(source) != fingerprint(catalog.path):
+        raise ValueError("Restored catalog differs from backup")
+    present, ready, pending = 0, 0, 0
+    with catalog.connect() as db:
+        keys = [r[0] for r in db.execute("SELECT key FROM index_messages")]
+    for key in keys:
+        require_space(backend.settings)
+        entry, cached = (
+            backend.state.entry(key),
+            catalog.get_text(key),
+        )
+        with catalog.connect() as db:
+            message = db.execute("SELECT * FROM messages WHERE key=?", (key,)).fetchone()
+        if not message or not cached or text_hash(cached["text"]) != entry["text_hash"]:
+            raise ValueError("Restored manifest differs from cached content")
+        partial = entry["phase"] != "ready" or message["phase"] == "deleting"
+        present += backend.verify_message(key, allow_partial=partial)
+        ready += not partial
+        pending += partial
+    if backend.request("POST", "/points/count", {"exact": True})["count"] != present:
+        raise ValueError("Restored collection has unexplained points")
+    return {
+        "ready": True,
+        "messages": ready,
+        "pending_manifests": pending,
+        "chunks": present,
+        "catalog_fingerprints": fingerprint(source),
+    }
 
 
 def main():

@@ -10,10 +10,11 @@ from pathlib import Path
 import sqlite3
 from .catalog import Catalog
 from .config import Settings
-from .embeddings import EmbeddingProfile, Ollama, validate_vector
+from .embeddings import EmbeddingProfile, Ollama, validate_vector, model_digest
 from .index_state import IndexState, exclusive_state
 from .qdrant import QdrantIndex, ImportedChunk
 from .migration_report import fingerprint, readonly, save_report
+from .health import require_space
 
 
 def clone_catalog(source, target):
@@ -126,7 +127,7 @@ def audit(source_catalog, export_path, *, backend_database=None):
         raise ValueError("Export has unexplained source identities")
     if active - set(cached):
         raise ValueError("Active messages are missing cached text")
-    incomplete = set()
+    incomplete = set(keys)
     if backend_database:
         # Compare source table row identities against AnythingLLM's durable document mapping.
         expected_by_path = defaultdict(set)
@@ -136,10 +137,11 @@ def audit(source_catalog, export_path, *, backend_database=None):
             ):
                 expected_by_path[path].add(vector_id)
         for key in keys:
-            expected = set().union(*(expected_by_path.get(p, set()) for p in paths[key]))
+            mapped = [expected_by_path.get(p, set()) for p in paths[key]]
+            expected = set().union(*mapped)
             actual = {rows[i]["id"] for i in groups[key]}
-            if expected and not expected.issubset(actual):
-                incomplete.add(key)
+            if mapped and all(mapped) and expected.issubset(actual):
+                incomplete.discard(key)
     return {
         "header": header,
         "groups": dict(groups),
@@ -218,7 +220,8 @@ def _import_index(
     ):
         raise ValueError("Migration requires a separate target catalog")
     data = audit(source_catalog, export_path, backend_database=backend_database)
-    if EmbeddingProfile(**data["header"]["profile"]) != backend.state.profile:
+    require_space(backend.settings)
+    if reuse_verified and EmbeddingProfile(**data["header"]["profile"]) != backend.state.profile:
         raise ValueError("Export embedding profile mismatch")
     source_hash = fingerprint(source_catalog)
     if source_hash != fingerprint(backend.catalog.path):
@@ -251,6 +254,7 @@ def _import_index(
         "export_sha256": data["export_sha256"],
     }
     for key in sorted(data["keys"]):
+        require_space(backend.settings)
         text = data["cached"].get(key)
         if text is None:
             report["pending_records"] += 1
@@ -342,6 +346,11 @@ def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--target-profile-current",
+        action="store_true",
+        help="With --rebuild, explicitly bind a fresh target to the currently installed configured model",
+    )
+    parser.add_argument(
         "command", choices=["audit", "import", "verify", "bind", "verify-embeddings"]
     )
     parser.add_argument("--source-catalog", type=Path, required=True)
@@ -370,6 +379,16 @@ def main():
             raise ValueError("Use a separate RAG_STATE_DIR")
         header, _, footer = read_export(args.export)
         profile = EmbeddingProfile(**header["profile"])
+        if args.target_profile_current:
+            if not args.rebuild or args.command != "import":
+                raise ValueError("Target profile selection requires a complete import --rebuild")
+            profile = EmbeddingProfile(
+                settings.embedding_model,
+                model_digest(settings.ollama_url, settings.embedding_model),
+                dimension=settings.embedding_dimension,
+                context=settings.embedding_context,
+            )
+        require_space(settings, extra=args.source_catalog.stat().st_size * 2)
         settings.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         target = settings.state_dir / "catalog.db"
         if args.command in ("verify", "bind") and not target.exists():
@@ -377,6 +396,11 @@ def main():
         if not target.exists():
             clone_catalog(args.source_catalog, target)
         catalog = Catalog(target)
+        if args.command in ("verify", "bind"):
+            saved = IndexState.saved(catalog)
+            if not saved:
+                raise ValueError("Target has no staged binding")
+            profile = EmbeddingProfile(**saved["binding"]["profile"])
         state = IndexState(catalog, settings.workspace, profile, allow_existing=True)
         embedder = Ollama(settings.ollama_url, profile, settings.embedding_timeout)
         if args.command == "verify-embeddings":

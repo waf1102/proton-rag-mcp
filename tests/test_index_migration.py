@@ -214,3 +214,117 @@ def test_verification_requires_imported_target(tmp_path, monkeypatch):
     with pytest.raises(SystemExit):
         main()
     assert not (destination / "catalog.db").exists()
+
+
+@pytest.mark.parametrize("mapping", ["absent", "empty", "partial"])
+def test_reuse_requires_complete_legacy_mapping(tmp_path, mapping):
+    import sqlite3
+
+    source, target, backend, key, text = fixture(tmp_path)
+    path = tmp_path / "export.jsonl"
+    write_export(
+        path,
+        [{"id": "old", "docSource": key, "text": "Invoice", "vector": [1.0] + [0.0] * 767}],
+        profile=Embedder.profile,
+    )
+    legacy = None
+    if mapping != "absent":
+        legacy = tmp_path / "legacy.db"
+        with sqlite3.connect(legacy) as db:
+            db.execute("CREATE TABLE workspace_documents (docpath TEXT,docId TEXT)")
+            db.execute("CREATE TABLE document_vectors (docId TEXT,vectorId TEXT)")
+            if mapping == "partial":
+                db.execute("INSERT INTO workspace_documents VALUES (?,?)", ("known", "document"))
+                db.execute("INSERT INTO document_vectors VALUES (?,?)", ("document", "old"))
+        if mapping == "partial":
+            for catalog in (source, target):
+                with catalog.connect() as db:
+                    db.execute("UPDATE messages SET paths=?", (json.dumps(["known", "missing"]),))
+    report = import_index(source.path, path, target.path.parent, backend, backend_database=legacy)
+    assert report["rebuilt_messages"] == 1
+    assert next(iter(backend.client._transport.handler.points.values()))["payload"]["text"] == text
+
+
+def test_complete_rebuild_can_use_explicit_new_profile(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    source, target, old_backend, key, text = fixture(tmp_path)
+    path = tmp_path / "export.jsonl"
+    write_export(path, [], profile=Embedder.profile)
+    destination = tmp_path / "new-profile"
+    clone_catalog(source.path, destination / "catalog.db")
+    catalog = Catalog(destination / "catalog.db")
+    embedder = Embedder()
+    embedder.profile = replace(Embedder.profile, digest="digest-b")
+    state = IndexState(catalog, "proton-mail", embedder.profile, allow_existing=True)
+    backend = QdrantIndex(
+        Settings(state_dir=destination),
+        catalog,
+        state,
+        embedder,
+        client=httpx.Client(transport=httpx.MockTransport(Service())),
+    )
+    backend.bootstrap()
+    report = import_index(source.path, path, destination, backend, reuse_verified=False)
+    assert report["rebuilt_messages"] == 1
+    assert backend.state.profile.digest == "digest-b"
+    assert verify_target(source.path, catalog.path, backend)["ready"]
+    import sys
+    from proton_rag.migration import main
+
+    monkeypatch.setattr(Settings, "from_env", lambda: Settings(state_dir=destination))
+    monkeypatch.setattr("proton_rag.migration.QdrantIndex", lambda *a, **kw: backend)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "proton-rag-migrate",
+            "verify",
+            "--source-catalog",
+            str(source.path),
+            "--export",
+            str(path),
+        ],
+    )
+    main()
+
+
+def test_disk_floor_blocks_and_resumes_migration(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+    from proton_rag.health import DiskLowError
+
+    source, target, backend, key, text = fixture(tmp_path)
+    path = tmp_path / "export.jsonl"
+    write_export(path, [], profile=Embedder.profile)
+    monkeypatch.setattr("proton_rag.health.shutil.disk_usage", lambda p: Mock(free=1))
+    with pytest.raises(DiskLowError):
+        import_index(source.path, path, target.path.parent, backend)
+    assert backend.state.entry(key) is None
+    monkeypatch.setattr("proton_rag.health.shutil.disk_usage", lambda p: Mock(free=20 * 1024**3))
+    assert import_index(source.path, path, target.path.parent, backend)["ready_messages"] == 1
+
+
+def test_disk_drop_mid_import_replays_partial_work(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+    from proton_rag.health import DiskLowError
+
+    source, target, backend, key, text = fixture(tmp_path)
+    text = "Synthetic cobalt. " * 5000
+    for catalog in (source, target):
+        catalog.store_text(key, text, [], False)
+    path = tmp_path / "export.jsonl"
+    write_export(path, [], profile=Embedder.profile)
+    checks = 0
+
+    def disk(path):
+        nonlocal checks
+        checks += 1
+        return Mock(free=1 if checks >= 4 else 20 * 1024**3)
+
+    monkeypatch.setattr("proton_rag.health.shutil.disk_usage", disk)
+    with pytest.raises(DiskLowError):
+        import_index(source.path, path, target.path.parent, backend)
+    assert not backend.state.ready(key) and backend.count(key) == 32
+    monkeypatch.setattr("proton_rag.health.shutil.disk_usage", lambda p: Mock(free=20 * 1024**3))
+    assert import_index(source.path, path, target.path.parent, backend)["ready_messages"] == 1
+    assert backend.state.replay(key) is None

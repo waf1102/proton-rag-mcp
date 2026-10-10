@@ -86,7 +86,7 @@ uv run proton-rag-backup restore-check --backup-dir /absolute/path/to/completed-
   --target-state /absolute/path/to/fresh-restore-state --collection restore-check-20261009
 ```
 
-This checks both files, restores with snapshot priority, checks original ownership, assigns the isolated target binding, and verifies every cached message's complete points. It never overwrites an existing collection or state directory. Inspect the report before deleting the test collection/directory. Restore using the pinned Qdrant minor version; retain the Ollama model volume and private runtime configuration separately. [Qdrant snapshot semantics](https://qdrant.tech/documentation/operations/snapshots/).
+This checks both files, restores with snapshot priority, checks original ownership, assigns the isolated target binding, and verifies committed points. Prepared messages, partial uploads and interrupted deletions remain unfinished; their present points are checked against the saved manifests. The writer can resume their saved work. Disk headroom is checked before cloning or uploading. This command never overwrites an existing collection or state directory. Inspect the report before deleting the test collection/directory. Restore using the pinned Qdrant minor version; retain the Ollama model volume and private runtime configuration separately. [Qdrant snapshot semantics](https://qdrant.tech/documentation/operations/snapshots/).
 
 For application upgrades, stop ingestion, create a verified pair, change the app symlink and restart the writer and MCP clients. Preserve the pre-upgrade pair for rollback. Do not run two versions against the same catalog.
 

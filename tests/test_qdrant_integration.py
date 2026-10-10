@@ -67,3 +67,59 @@ def test_real_paired_backup_and_isolated_restore(tmp_path):
     finally:
         backend.client.delete(settings.qdrant_url + "/collections/" + target_collection)
         backend.request("DELETE", "", operation="fixture_cleanup")
+
+
+@pytest.mark.parametrize("phase", ["prepared", "uploading", "deleting"])
+def test_real_restore_retains_unfinished_ingestion(tmp_path, phase):
+    from proton_rag.backup import backup, restore_check
+    from proton_rag.index import IndexFailure
+    import httpx
+
+    url = os.environ.get("QDRANT_TEST_URL")
+    if not url:
+        pytest.skip("Set QDRANT_TEST_URL to isolated Qdrant")
+    source = tmp_path / "source"
+    source.mkdir()
+    settings = Settings(state_dir=source, qdrant_url=url, workspace="fixture-" + uuid.uuid4().hex)
+    catalog = Catalog(source / "catalog.db")
+    state = IndexState(catalog, settings.workspace, Embedder.profile)
+    backend = QdrantIndex(settings, catalog, state, Embedder())
+    backend.bootstrap()
+    key = "proton-mail-" + "d" * 64
+    text = "Synthetic cobalt. " * 5000
+    catalog.intent(key, "fixtures", "1", "1", key, True, {})
+    catalog.store_text(key, text, [], True)
+    collection = "restore-" + uuid.uuid4().hex
+    try:
+        if phase == "uploading":
+            actual = backend.client
+
+            class Partial:
+                def request(self, method, url, **kwargs):
+                    if method == "PUT" and "/points?" in url:
+                        self.writes = getattr(self, "writes", 0) + 1
+                        if self.writes == 2:
+                            return httpx.Response(503, request=httpx.Request(method, url))
+                    return actual.request(method, url, **kwargs)
+
+            backend.client = Partial()
+            with pytest.raises(IndexFailure):
+                backend.ensure(key, text, before_upload=lambda: catalog.dispatched(key))
+            backend.client = actual
+        elif phase == "deleting":
+            backend.ensure(key, text)
+            catalog.activate(key, [key])
+            catalog.forget(next(iter(catalog.rows())), retain_message=True)
+            catalog.mark_deleting(key)
+            backend.request("POST", "/points/delete?wait=true", {"filter": backend._filter(key)})
+        path = backup(settings, tmp_path / "backups", backend)
+        report = restore_check(settings, path, tmp_path / "restored", collection)
+        assert report["ready"]
+        restored = Catalog(tmp_path / "restored/catalog.db")
+        with restored.connect() as db:
+            assert (
+                db.execute("SELECT phase FROM messages WHERE key=?", (key,)).fetchone()[0] == phase
+            )
+    finally:
+        backend.client.delete(url + "/collections/" + collection)
+        backend.request("DELETE", "", operation="fixture_cleanup")

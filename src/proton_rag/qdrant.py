@@ -12,6 +12,7 @@ from .chunks import split_text, point_id
 from .embeddings import ContextExceeded, validate_vector
 from .index import KEY, IndexFailure, local_url
 from .index_state import text_hash
+from .health import require_space
 
 
 @dataclass(frozen=True)
@@ -108,11 +109,17 @@ class QdrantIndex:
             "count"
         ]
 
-    def verify_message(self, key):
+    def verify_message(self, key, *, allow_partial=False):
         manifest = self.state.entry(key)
-        if not manifest or self.count(key) != len(manifest["points"]):
+        if not manifest:
+            raise IndexFailure("index_incomplete", "verify")
+        count = self.count(key)
+        if count > len(manifest["points"]) or (
+            not allow_partial and count != len(manifest["points"])
+        ):
             raise IndexFailure("index_incomplete", "verify")
         expected = manifest["points"]
+        verified = 0
         for offset in range(0, len(expected), 64):
             batch = expected[offset : offset + 64]
             result = self.request(
@@ -124,7 +131,10 @@ class QdrantIndex:
             for wanted in batch:
                 point = records.get(wanted["id"])
                 if not point:
+                    if allow_partial:
+                        continue
                     raise IndexFailure("index_incomplete", "verify")
+                verified += 1
                 payload = point.get("payload", {})
                 if (
                     payload.get("message_id") != key
@@ -145,7 +155,9 @@ class QdrantIndex:
                     for actual, expected in zip(dense, expected_dense, strict=True)
                 ):
                     raise IndexFailure("index_incomplete", "verify")
-        return True
+        if verified != count:
+            raise IndexFailure("index_incomplete", "verify")
+        return count
 
     def _write(self, key, text, chunks, before_upload=None):
         self._filter(key)
@@ -196,10 +208,14 @@ class QdrantIndex:
                     },
                 }
             )
-        self.state.prepare(key, text, manifest)
+        self.state.prepare(key, text, manifest, replay=points)
+        return self._dispatch(key, points, before_upload)
+
+    def _dispatch(self, key, points, before_upload=None):
         if before_upload:
             before_upload()
         for offset in range(0, len(points), 32):
+            require_space(self.settings)
             result = self.request(
                 "PUT",
                 "/points?wait=true",
@@ -232,6 +248,8 @@ class QdrantIndex:
     def ensure(self, key, text, before_upload=None):
         if self.state.ready(key):
             return self._write(key, text, [], before_upload)
+        if self.state.entry(key):
+            return self.recover(key, text, before_upload)
         chunks = []
         for chunk in split_text(text, self.settings.chunk_chars, self.settings.chunk_overlap):
             chunks.extend(self._embed(chunk))
@@ -250,6 +268,10 @@ class QdrantIndex:
             except IndexFailure as error:
                 if error.diagnostic["code"] != "index_incomplete":
                     raise
+                replay = self.state.replay(key)
+                if replay is None:
+                    raise IndexFailure("index_reconciliation", "recover") from None
+                return self._dispatch(key, replay, before_upload)
         return self.ensure(key, text, before_upload)
 
     def import_message(self, key, text, chunks):

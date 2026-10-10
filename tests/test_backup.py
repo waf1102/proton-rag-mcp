@@ -91,3 +91,21 @@ def test_low_disk_refuses_backup_before_copy(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="space"):
         backup(Settings(state_dir=tmp_path), destination, backend)
     assert not destination.exists()
+
+
+def test_low_disk_restore_refuses_target_creation(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+    from proton_rag.backup import restore_check
+    from proton_rag.health import DiskLowError
+
+    catalog, state, backend, service = setup_index(tmp_path)
+    snapshot_backend(backend)
+    monkeypatch.setattr("proton_rag.backup.download", lambda *a: a[-1].write_bytes(b"fixture"))
+    pair = backup(
+        Settings(state_dir=tmp_path), tmp_path.parent / (tmp_path.name + "-backups"), backend
+    )
+    target = tmp_path.parent / (tmp_path.name + "-restore")
+    monkeypatch.setattr("proton_rag.health.shutil.disk_usage", lambda p: Mock(free=1))
+    with pytest.raises(DiskLowError):
+        restore_check(Settings(state_dir=tmp_path), pair, target, "new-collection")
+    assert not target.exists()
