@@ -25,7 +25,7 @@ The daemon and MCP server share a SQLite catalog and Qdrant collection. Use sepa
 | `RAG_PARSER_TIMEOUT` | `15` seconds |
 | `RAG_MAX_TEXT_CHARS`, `RAG_MAX_PARTS` | `200000`, `200`; extraction bounds |
 | `RAG_SEARCH_DEFAULT`, `RAG_SEARCH_MAX` | `10`, `50` |
-| `RAG_EXCERPT_CHARS`, `RAG_ANSWER_SOURCES` | `4000`, `5` |
+| `RAG_EXCERPT_CHARS`, `RAG_ANSWER_SOURCES` | `4000`, `5`; internal excerpts for cloud answers (search previews are at most 300 characters) |
 | `OPENROUTER_API_KEY` | Optional; enables `answer_mail` |
 | `OPENROUTER_MODEL`, `RAG_MAX_OUTPUT_TOKENS` | `openai/gpt-4.1-mini`, `1024` |
 
@@ -58,9 +58,9 @@ The daemon gets seven minutes for graceful shutdown. Increase `TimeoutStopSec` i
 
 ## Full-message reading and coverage
 
-`search_mail` returns a stable `message_id`, metadata, known folder locations and citations. `read_mail` serves the stored extracted body and supported attachment text; follow `next_offset` until null. Parser truncation and skipped parts are reported separately. No raw MIME or binary attachment is exposed.
+`search_mail` returns a stable `message_id`, compact metadata and previews, folder names and a citation. [Exact search, filters, cursors and batch reading](retrieval.md) support exhaustive indexed searches and extraction. `read_mail` serves the stored extracted body and supported attachment text; follow `next_offset` until null. Parser truncation and skipped parts are reported separately. No raw MIME or binary attachment is exposed.
 
-`index_status` separates unique messages, folder appearances, cached text, pending ingestion and per-folder coverage. It also reports `index_backend`, `index_ready_messages`, `index_pending_messages` and `embedding_profile`. Backend readiness describes imported data; it does not mean the mailbox is fully indexed. `unique_messages_expected` remains unknown until unread content has been observed. Search hit counts are relevance limits, not exhaustive mailbox counts.
+`index_status` separates unique messages, folder appearances, cached text, pending ingestion and per-folder coverage. It also reports `index_backend`, `index_ready_messages`, `index_pending_messages` and `embedding_profile`. Backend readiness describes imported data; it does not mean the mailbox is fully indexed. `unique_messages_expected` remains unknown until unread content has been observed. Hybrid hit counts are relevance limits. Exact `match_count` counts matching indexed messages; follow all pages to enumerate them. `lexical_ready` and `lexical_messages` report lexical backfill readiness and cached-text coverage.
 
 ## Index health
 

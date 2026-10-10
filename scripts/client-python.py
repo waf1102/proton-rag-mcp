@@ -28,7 +28,12 @@ async def run():
         async with ClientSession(r, w) as client:
             init = await client.initialize()
             tools = await client.list_tools()
-            assert [t.name for t in tools.tools] == ["search_mail", "index_status", "read_mail"]
+            assert [t.name for t in tools.tools] == [
+                "search_mail",
+                "index_status",
+                "read_mail",
+                "read_mail_batch",
+            ]
             result = await client.call_tool(
                 "search_mail",
                 {"query": os.environ.get("RAG_INTEROP_QUERY", "When does cobalt arrive?")},
@@ -37,6 +42,22 @@ async def run():
             if not os.environ.get("RAG_INTEROP_QUERY"):
                 assert "Tuesday" in result.content[0].text
             assert "imap:///" in result.content[0].text
+            hit = json.loads(result.content[0].text)["sources"][0]
+            batch = await client.call_tool(
+                "read_mail_batch",
+                {
+                    "requests": [
+                        {"message_id": hit["message_id"], "length": 128},
+                        {"message_id": "unknown-fixture"},
+                    ]
+                },
+            )
+            assert not batch.isError
+            assert len(batch.content[0].text.encode()) <= 8192
+            messages = json.loads(batch.content[0].text)["messages"]
+            assert messages[0]["message_id"] == hit["message_id"]
+            assert messages[0]["offset"] == 0
+            assert messages[1]["error"]
             print(
                 json.dumps(
                     {

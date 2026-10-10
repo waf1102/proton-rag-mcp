@@ -63,10 +63,39 @@ class Catalog:
                             ) from None
                         self._migrate(db)
             db.execute(
+                "CREATE INDEX IF NOT EXISTS coverage_locations ON documents(active,folder,validity,message_key)"
+            )
+            db.execute(
                 "CREATE TABLE IF NOT EXISTS folder_inventory "
                 "(folder TEXT PRIMARY KEY, validity TEXT, total INTEGER, fingerprint TEXT, "
                 "observed_at TEXT, successful INTEGER)"
             )
+
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS message_dates (key TEXT PRIMARY KEY, day TEXT, sent_at REAL)"
+            )
+            db.execute("CREATE INDEX IF NOT EXISTS message_date_time ON message_dates(sent_at)")
+            missing = db.execute(
+                "SELECT key,metadata FROM messages WHERE key NOT IN (SELECT key FROM message_dates)"
+            ).fetchall()
+            db.executemany(
+                "INSERT INTO message_dates VALUES (?,?,?)",
+                [(r["key"], *self._date(json.loads(r["metadata"]))) for r in missing],
+            )
+
+            from .lexical import initialize
+
+            initialize(db)
+
+    @staticmethod
+    def _date(metadata):
+        try:
+            date = parsedate_to_datetime(metadata.get("date", ""))
+            if date.tzinfo is None:
+                date = date.replace(tzinfo=timezone.utc)
+            return date.date().isoformat(), date.timestamp()
+        except (ValueError, TypeError, OverflowError):
+            return None, None
 
     def _migrate(self, db):
         backup = self.path.with_name(self.path.stem + ".pre-dedup.db")
@@ -164,10 +193,40 @@ class Catalog:
             inventories = {
                 r["folder"]: dict(r) for r in db.execute("SELECT * FROM folder_inventory")
             }
-            rows = list(self.rows().values())
-            rows = [r for r in rows if r["active"]]
-            cached_keys = {r[0] for r in db.execute("SELECT key FROM message_text")}
-            pending_rows = [r for r in self.rows().values() if not r["active"]]
+            folders = json.loads(scope[0]) if scope else list(inventories)
+            if not folders and not scope:
+                folders = [
+                    r[0]
+                    for r in db.execute("SELECT DISTINCT folder FROM documents ORDER BY folder")
+                ]
+            selected = """WITH selected AS (
+                SELECT d.* FROM documents d LEFT JOIN folder_inventory i ON i.folder=d.folder
+                WHERE d.folder IN (SELECT value FROM json_each(?))
+                AND (i.folder IS NULL OR d.validity=i.validity)) """
+            params = (json.dumps(folders),)
+            counts = db.execute(
+                selected
+                + """, canonical AS (SELECT message_key,COUNT(*) AS memberships FROM selected
+                WHERE active=1 GROUP BY message_key)
+                SELECT coalesce(SUM(c.memberships),0) AS entries, COUNT(*) AS unique_count,
+                coalesce(SUM(CASE WHEN t.key IS NOT NULL THEN c.memberships ELSE 0 END),0) AS cached,
+                COUNT(t.key) AS unique_cached, MIN(md.day) AS earliest,MAX(md.day) AS latest
+                FROM canonical c LEFT JOIN message_text t ON t.key=c.message_key
+                LEFT JOIN message_dates md ON md.key=c.message_key""",
+                params,
+            ).fetchone()
+            folder_counts = {
+                r["folder"]: r["count"]
+                for r in db.execute(
+                    selected
+                    + "SELECT folder,COUNT(*) AS count FROM selected WHERE active=1 GROUP BY folder",
+                    params,
+                )
+            }
+            pending = db.execute(
+                selected + "SELECT COUNT(*) FROM selected WHERE active=0", params
+            ).fetchone()[0]
+            retained = db.execute("SELECT COUNT(*) FROM documents WHERE active=1").fetchone()[0]
             unresolved = db.execute(
                 "SELECT COUNT(*) FROM messages m WHERE m.phase='uploading' "
                 "AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.message_key=m.key)"
@@ -192,28 +251,11 @@ class Catalog:
                         "index_pending_messages": pending_index,
                         "embedding_profile": EmbeddingProfile(**saved["profile"]).identity,
                     }
-        folders = (
-            json.loads(scope[0])
-            if scope
-            else list(inventories) or sorted({r["folder"] for r in rows + pending_rows})
-        )
-
-        def selected(row):
-            inv = inventories.get(row["folder"])
-            return row["folder"] in folders and (not inv or row["validity"] == inv["validity"])
-
-        retained = len(rows)
-        rows = [r for r in rows if selected(r)]
-        cached = sum(r["message_key"] in cached_keys for r in rows)
-        unique = len({r["message_key"] for r in rows})
-        pending = sum(selected(r) for r in pending_rows)
+        unique, cached = counts["unique_count"], counts["cached"]
         reports = []
         for folder in folders:
             inv = inventories.get(folder)
-            count = sum(
-                r["folder"] == folder and (not inv or r["validity"] == inv["validity"])
-                for r in rows
-            )
+            count = folder_counts.get(folder, 0)
             reports.append(
                 {
                     "folder": folder,
@@ -223,28 +265,16 @@ class Catalog:
                     "complete": bool(inv and inv["successful"] and count == inv["total"]),
                 }
             )
-        dates = []
-        for row in rows:
-            try:
-                dates.append(
-                    parsedate_to_datetime(json.loads(row["metadata"]).get("date", ""))
-                    .date()
-                    .isoformat()
-                )
-            except (ValueError, TypeError, OverflowError):
-                pass
         known = bool(scope) and all(r["expected"] is not None for r in reports)
         return {
             **index_status,
             "runtime": json.loads(runtime[0]) if runtime else {"state": "unknown"},
             "coverage_complete": known and all(r["complete"] for r in reports),
             "folder_entries_expected": sum(r["expected"] for r in reports) if known else None,
-            "folder_entries_indexed": len(rows),
+            "folder_entries_indexed": counts["entries"],
             "unique_messages_indexed": unique,
-            "unique_full_text_available": len(
-                {r["message_key"] for r in rows if r["message_key"] in cached_keys}
-            ),
-            "shared_folder_entries": len(rows) - unique,
+            "unique_full_text_available": counts["unique_cached"],
+            "shared_folder_entries": counts["entries"] - unique,
             "pending_duplicate_cleanup": cleanup_pending,
             "unresolved_orphan_uploads": unresolved,
             "unique_messages_expected": unique
@@ -252,9 +282,11 @@ class Catalog:
             else None,
             "full_text_available": cached,
             "pending_entries": pending,
-            "retained_entries_outside_scope": retained - len(rows),
+            "retained_entries_outside_scope": retained - counts["entries"],
             "folders": reports,
-            "indexed_date_range": {"earliest": min(dates), "latest": max(dates)} if dates else None,
+            "indexed_date_range": {"earliest": counts["earliest"], "latest": counts["latest"]}
+            if counts["earliest"]
+            else None,
             "notice": "Coverage is the last observed inventory, not a guarantee of exhaustive search. "
             "Folder entries count locations; unique messages count content hashes. "
             "The unique mailbox total is unknown until content is read. Missing results do not prove that mail does not exist; "
@@ -277,6 +309,7 @@ class Catalog:
     def connect(self):
         db = sqlite3.connect(self.path, timeout=30)
         db.row_factory = sqlite3.Row
+        db.create_function("casefold", 1, lambda s: str(s).casefold(), deterministic=True)
         return db
 
     @staticmethod
@@ -294,6 +327,58 @@ class Catalog:
                 query += " WHERE d.folder=?"
                 params = (folder,)
             return {r["key"]: dict(r) for r in db.execute(query, params)}
+
+    def locations(self, keys):
+        """Hydrate only selected IDs (including historical aliases)."""
+        groups, aliases = {}, {}
+        keys = list(set(keys))
+        with self.connect() as db:
+            for offset in range(0, len(keys), 400):
+                batch = keys[offset : offset + 400]
+                marks = ",".join("?" for _ in batch)
+                mapped = {
+                    r["key"]: r["message_key"]
+                    for r in db.execute(
+                        f"SELECT * FROM message_aliases WHERE key IN ({marks})", batch
+                    )
+                }
+                aliases.update({key: mapped.get(key, key) for key in batch})
+                canonical = list(set(aliases[key] for key in batch))
+                placeholders = ",".join("?" for _ in canonical)
+                for row in db.execute(
+                    self._joined() + f" WHERE d.active=1 AND d.message_key IN ({placeholders})",
+                    canonical,
+                ):
+                    groups.setdefault(row["message_key"], []).append(dict(row))
+        return groups, aliases
+
+    def active_keys(self, keys):
+        active = set()
+        keys = list(set(keys))
+        with self.connect() as db:
+            for offset in range(0, len(keys), 400):
+                batch = keys[offset : offset + 400]
+                marks = ",".join("?" for _ in batch)
+                active.update(
+                    r[0]
+                    for r in db.execute(
+                        f"SELECT DISTINCT message_key FROM documents WHERE active=1 AND message_key IN ({marks})",
+                        batch,
+                    )
+                )
+        return active
+
+    def texts(self, keys):
+        if not keys:
+            return {}
+        marks = ",".join("?" for _ in keys)
+        with self.connect() as db:
+            return {
+                r["key"]: r["text"]
+                for r in db.execute(
+                    f"SELECT key,text FROM message_text WHERE key IN ({marks})", keys
+                )
+            }
 
     def message(self, key=None, identity=None):
         with self.connect() as db:
@@ -334,6 +419,10 @@ class Catalog:
             )
             db.execute("INSERT OR IGNORE INTO message_aliases VALUES (?,?)", (key, canonical))
             db.execute("DELETE FROM orphan_marks WHERE key=?", (canonical,))
+            db.execute(
+                "INSERT OR IGNORE INTO message_dates VALUES (?,?,?)",
+                (canonical, *self._date(metadata)),
+            )
         return canonical
 
     def dispatched(self, key):
@@ -369,6 +458,7 @@ class Catalog:
         db.execute("DELETE FROM orphan_marks WHERE key=?", (key,))
         db.execute("DELETE FROM message_text WHERE key=?", (key,))
         db.execute("DELETE FROM message_aliases WHERE message_key=?", (key,))
+        db.execute("DELETE FROM message_dates WHERE key=?", (key,))
         db.execute("DELETE FROM messages WHERE key=?", (key,))
 
     def orphan_messages(self):
