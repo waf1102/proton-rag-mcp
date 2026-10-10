@@ -50,13 +50,16 @@ class Service:
             }
             return httpx.Response(200, json={"result": {"status": "completed"}})
         if path.endswith("/points/count"):
-            key = body["filter"]["must"][0]["match"]["value"]
+            key = body.get("filter", {}).get("must", [{"match": {"value": None}}])[0]["match"][
+                "value"
+            ]
             return httpx.Response(
                 200,
                 json={
                     "result": {
                         "count": sum(
-                            p["payload"]["message_id"] == key for p in self.points.values()
+                            key is None or p["payload"]["message_id"] == key
+                            for p in self.points.values()
                         )
                     }
                 },
@@ -228,12 +231,13 @@ def test_migrated_active_mail_is_not_refetched(tmp_path):
     from proton_rag.sync import synchronize, synchronize_folder
     from proton_rag.mailbox import Snapshot, Inventory
     from unittest.mock import Mock
+
     catalog, state, backend, service = setup_index(tmp_path)
-    raw = b'Subject: Invoice\n\nCobalt invoice AX9385'
-    synchronize(catalog, backend, Snapshot('1', {'7': raw}))
+    raw = b"Subject: Invoice\n\nCobalt invoice AX9385"
+    synchronize(catalog, backend, Snapshot("1", {"7": raw}))
     before = dict(service.points)
     mailbox = Mock()
-    mailbox.inventory.return_value = Inventory('INBOX', '1', ('7',))
-    synchronize_folder(catalog, backend, mailbox, 'INBOX')
+    mailbox.inventory.return_value = Inventory("INBOX", "1", ("7",))
+    synchronize_folder(catalog, backend, mailbox, "INBOX")
     mailbox.fetch.assert_not_called()
     assert service.points == before
