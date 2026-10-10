@@ -23,3 +23,17 @@ def test_defaults_and_folder_configuration():
 def test_invalid_configuration_fails(env):
     with pytest.raises(ValueError):
         Settings.from_env(env)
+
+
+def test_qdrant_and_ollama_settings_are_shared_and_loopback_only():
+    settings = Settings.from_env(
+        {
+            "QDRANT_URL": "http://127.0.0.1:6333",
+            "OLLAMA_URL": "http://127.0.0.1:11434",
+            "QDRANT_COLLECTION": "mail-copy",
+        }
+    )
+    assert settings.qdrant_url == "http://127.0.0.1:6333"
+    assert settings.workspace == "mail-copy"
+    with pytest.raises(ValueError):
+        Settings.from_env({"QDRANT_URL": "https://remote.example"})

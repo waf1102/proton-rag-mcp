@@ -10,6 +10,13 @@ from pathlib import Path
 class Settings:
     state_dir: Path = Path.home() / ".local/share/proton-rag/mail"
     anything_url: str = "http://127.0.0.1:3001"
+    qdrant_url: str = "http://127.0.0.1:6333"
+    ollama_url: str = "http://127.0.0.1:11434"
+    embedding_model: str = "nomic-embed-text"
+    embedding_dimension: int = 768
+    embedding_context: int = 2048
+    chunk_chars: int = 1800
+    chunk_overlap: int = 200
     workspace: str = "proton-mail"
     imap_host: str = "127.0.0.1"
     imap_port: int = 1143
@@ -39,6 +46,8 @@ class Settings:
         names = {
             "state_dir": "RAG_STATE_DIR",
             "anything_url": "ANYTHING_URL",
+            "qdrant_url": "QDRANT_URL",
+            "ollama_url": "OLLAMA_URL",
             "workspace": "ANYTHING_WORKSPACE",
             "imap_host": "IMAP_HOST",
             "imap_port": "IMAP_PORT",
@@ -72,6 +81,16 @@ class Settings:
                     raise ValueError(f"{key} must not be empty")
                 values[field] = raw
         result = cls(**values)
+        if "QDRANT_COLLECTION" in env:
+            from dataclasses import replace
+
+            result = replace(result, workspace=env["QDRANT_COLLECTION"])
+        from .index import local_url
+
+        local_url(result.qdrant_url)
+        local_url(result.ollama_url)
+        if result.chunk_chars <= result.chunk_overlap:
+            raise ValueError("Chunk target must exceed overlap")
         if result.search_default > result.search_max or result.answer_sources > result.search_max:
             raise ValueError("Default retrieval limits must not exceed RAG_SEARCH_MAX")
         if result.imap_port > 65535:
