@@ -26,7 +26,7 @@ An empty exact query with filters browses the matching messages. Header dates ar
 
 Responses include `sources`, a small coverage summary, `exhaustive`, `has_more`, and `next_cursor`. `match_count` appears only in exact mode. Repeat the same query, mode, limit and filters with the returned cursor until `has_more` is false. Cursors expire after ten minutes, a server restart, or eviction from the bounded cache; on an explicit cursor error, start the query again. Deletions between pages are hidden; the original match count may then exceed the number returned. Newly arriving messages require a new search.
 
-Every search page fits within 8 KiB of serialized result text. Sources include stable `message_id`, citation, subject/sender/date, folder names and a preview up to 300 characters. Full metadata is available from `read_mail`. An unusually large folder/citation payload produces an explicit budget error instead of silently dropping the message.
+Every search page fits under 4 KB of serialized result text. This stays below Gemini’s observed inline-output threshold; larger selections continue on subsequent pages. Sources include stable `message_id`, citation, subject/sender/date, folder names and a preview up to 300 characters. Full metadata is available from `read_mail`. An unusually large folder/citation payload produces an explicit budget error instead of silently dropping the message.
 
 ## Read full text
 
@@ -38,7 +38,7 @@ Use `read_mail_batch` for up to five pages:
 {"requests": [{"message_id": "<first ID>", "length": 2000}, {"message_id": "<second ID>", "offset": 0}]}
 ```
 
-Its `messages` are associated with the input through `request_index`. Each successful item has full metadata, extraction flags and its own continuation offset. The combined response is bounded to 8 KiB, so actual pages may be shorter. Retry individual errors separately; if metadata exceeds the batch budget, use `read_mail`.
+Its `messages` are associated with the input through `request_index`. Each successful item has full metadata, extraction flags and its own continuation offset. The combined response is bounded below 4 KB, so actual pages may be shorter. Retry individual errors separately; if metadata exceeds the batch budget, use `read_mail`.
 
 ## Existing installations
 

@@ -93,7 +93,7 @@ def build(catalog, backend, api_key=None, settings=None):
         folder: Annotated[str | None, Field(max_length=2000)] = None,
         cursor: Annotated[str | None, Field(max_length=200)] = None,
     ) -> dict:
-        """Search local mail with compact, cited previews (up to 8 KiB per page).
+        """Search local mail with compact, cited previews (under 4 KB per page).
 
         Hybrid mode is a bounded relevance ranking, never an exhaustive mail list. Exact mode
         enumerates indexed FTS5 terms, quoted phrases and AND/OR/NOT expressions. Empty exact
@@ -263,8 +263,9 @@ def build(catalog, backend, api_key=None, settings=None):
     async def read_mail_batch(
         requests: Annotated[list[ReadRequest], Field(min_length=1, max_length=5)],
     ) -> dict:
-        """Read up to five full-text pages locally in a combined response of at most 8 KiB.
+        """Read up to five full-text pages locally in a combined response of under 4 KB.
 
+        Call with {"requests": [{"message_id": "<ID>", "offset": 0, "length": 2000}]}.
         Each request accepts message_id, offset (default 0), length (default 2000 characters).
         Pages may be shorter to fit the budget. Follow each next_offset until null. Individual
         errors include request_index; large metadata should be read with read_mail. Includes

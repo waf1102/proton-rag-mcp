@@ -10,7 +10,8 @@ import re
 import secrets
 import time
 
-BUDGET = 8192
+# Gemini offloads results around 4 KB; leave room for client framing.
+BUDGET = 3900
 
 
 def wire_size(value):
