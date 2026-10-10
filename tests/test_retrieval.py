@@ -327,3 +327,21 @@ def test_snapshot_memory_accounts_for_fallback_previews():
     pages = Pages(max_bytes=10)
     with pytest.raises(ValueError, match="memory"):
         pages.create("query", ["key"], False, {"key": "x" * 8})
+
+
+async def test_pages_stay_below_gemini_inline_threshold(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    keys = seed(catalog, 10, text="Flight 3366 " + "x" * 10000)
+    server = build(catalog, Ranked(keys))
+    # The observed Gemini harness offloads a 4173-byte tool result, but keeps 3855 inline.
+    # Leave framing headroom beneath its approximately 4 KB inline boundary.
+    for tool, args in [
+        ("search_mail", {"query": "flight", "limit": 10}),
+        (
+            "read_mail_batch",
+            {"requests": [{"message_id": key, "length": 2000} for key in keys[:3]]},
+        ),
+    ]:
+        result = await server.call_tool(tool, args)
+        content = result[0] if isinstance(result, tuple) else result
+        assert len(content[0].text.encode()) < 4000
