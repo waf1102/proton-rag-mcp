@@ -66,6 +66,10 @@ class Catalog:
                 "CREATE INDEX IF NOT EXISTS coverage_locations ON documents(active,folder,validity,message_key)"
             )
             db.execute(
+                "CREATE INDEX IF NOT EXISTS active_message_locations "
+                "ON documents(message_key,folder) WHERE active=1"
+            )
+            db.execute(
                 "CREATE TABLE IF NOT EXISTS folder_inventory "
                 "(folder TEXT PRIMARY KEY, validity TEXT, total INTEGER, fingerprint TEXT, "
                 "observed_at TEXT, successful INTEGER)"

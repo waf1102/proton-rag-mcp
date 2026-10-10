@@ -39,6 +39,7 @@ async def run():
                 {"query": os.environ.get("RAG_INTEROP_QUERY", "When does cobalt arrive?")},
             )
             assert not result.isError
+            assert result.structuredContent == json.loads(result.content[0].text)
             if not os.environ.get("RAG_INTEROP_QUERY"):
                 assert "Tuesday" in result.content[0].text
             assert "imap:///" in result.content[0].text
@@ -53,11 +54,23 @@ async def run():
                 },
             )
             assert not batch.isError
-            assert len(batch.content[0].text.encode()) <= 8192
+            assert len(batch.content[0].text.encode()) <= 3900
             messages = json.loads(batch.content[0].text)["messages"]
             assert messages[0]["message_id"] == hit["message_id"]
             assert messages[0]["offset"] == 0
             assert messages[1]["error"]
+            alias = await client.call_tool("read_mail_batch", {"message_ids": [hit["message_id"]]})
+            assert not alias.isError
+            page = json.loads(alias.content[0].text)
+            if page["next_call"]:
+                following = await client.call_tool(
+                    page["next_call"]["tool"], page["next_call"]["arguments"]
+                )
+                assert not following.isError
+                assert (
+                    json.loads(following.content[0].text)["messages"][0]["offset"]
+                    == page["messages"][0]["next_offset"]
+                )
             print(
                 json.dumps(
                     {

@@ -4,7 +4,7 @@ Use `search_mail` to discover messages, then `read_mail` or `read_mail_batch` to
 
 ## Search modes
 
-**Hybrid** (default) combines semantic and lexical ranking. It is useful for questions in plain language. It returns a bounded set of candidates, not every matching message. `limit` selects up to 50 candidates (default 10); compact pages may hold fewer. Follow `next_cursor` to see the rest of that selected set.
+**Hybrid** (default) combines semantic and lexical ranking. It is useful for questions in plain language. It returns a bounded set of candidates, not every matching message. `limit` selects up to 50 candidates (default 10); compact pages may hold fewer. Execute the returned `next_call` to see the rest of that selected set.
 
 **Exact** lists every active, committed message matching the indexed words and filters. It searches subject, sender, and cached extracted body, including supported attachment text. Numeric terms match tokens: `3366` does not match `13366`. It uses [SQLite FTS5 syntax](https://www.sqlite.org/fts5.html#full_text_query_syntax):
 
@@ -24,21 +24,27 @@ Both modes accept case-insensitive `sender` and `subject` substrings and an exac
 
 An empty exact query with filters browses the matching messages. Header dates are **email send dates**, not travel dates, invoice dates, or other dates in their contents.
 
-Responses include `sources`, a small coverage summary, `exhaustive`, `has_more`, and `next_cursor`. `match_count` appears only in exact mode. Repeat the same query, mode, limit and filters with the returned cursor until `has_more` is false. Cursors expire after ten minutes, a server restart, or eviction from the bounded cache; on an explicit cursor error, start the query again. Deletions between pages are hidden; the original match count may then exceed the number returned. Newly arriving messages require a new search.
+Responses include `sources`, a small coverage summary, `exhaustive`, `has_more`, `remaining_count`, and a ready-to-use `next_call`. The existing `next_cursor` field remains available. `match_count` appears only in exact mode. When `has_more` is true, the page is incomplete. Execute `next_call.tool` with `next_call.arguments` until it is false. A continuation needs only `{"cursor":"<returned cursor>"}`; the server retains the original query, mode, limit and filters. Repeating those arguments also works, but changing them produces an explicit error. Cursors expire after ten minutes, a server restart, or eviction from the bounded cache; on an explicit cursor error, start the query again. Deletions between pages are hidden; the original match count may then exceed the number returned. Newly arriving messages require a new search.
 
-Every search page fits under 4 KB of serialized result text. This stays below Gemini’s observed inline-output threshold; larger selections continue on subsequent pages. Sources include stable `message_id`, citation, subject/sender/date, folder names and a preview up to 300 characters. Full metadata is available from `read_mail`. An unusually large folder/citation payload produces an explicit budget error instead of silently dropping the message.
+Every search page fits under 4 KB of compact UTF-8 JSON result text. The same data is also provided as MCP structured content. This stays below Gemini’s observed inline-output threshold; larger selections continue on subsequent pages. Sources include stable `message_id`, citation, subject/sender/date, folder names and a preview up to 300 characters. Full metadata is available from `read_mail`. An unusually large folder/citation payload produces an explicit budget error instead of silently dropping the message.
 
 ## Read full text
 
 `read_mail` accepts `message_id` (or an existing citation), `offset` and `length`. Follow `next_offset` until null. Offsets and lengths count Unicode characters, not bytes. `total_chars` describes cached extracted text; extraction flags report skipped or truncated parts. Raw MIME and binary attachments are not returned.
 
-Use `read_mail_batch` for up to five pages:
+Prefer `read_mail_batch` for inline reading. Start with up to five IDs:
+
+```json
+{"message_ids": ["<first ID>", "<second ID>"]}
+```
+
+Or specify offsets and lengths:
 
 ```json
 {"requests": [{"message_id": "<first ID>", "length": 2000}, {"message_id": "<second ID>", "offset": 0}]}
 ```
 
-Its `messages` are associated with the input through `request_index`. Each successful item has full metadata, extraction flags and its own continuation offset. The combined response is bounded below 4 KB, so actual pages may be shorter. Retry individual errors separately; if metadata exceeds the batch budget, use `read_mail`.
+Its `messages` are associated with the input through `request_index`. Each successful item has full metadata, extraction flags and its own continuation offset. When text remains, execute the returned `next_call` with its cursor to read the unfinished messages; finished items are omitted from the next batch. Alternatively, construct `requests` using each `next_offset`. Supply one of `message_ids`, `requests`, or `cursor` per call. The combined response is bounded below 4 KB, so actual pages may be shorter. Cite the returned `citation` for extracted facts. Text is never whitespace-normalized, and offsets continue to refer to the original cached Unicode text. Retry individual errors separately; if metadata exceeds the batch budget, use `read_mail`.
 
 ## Existing installations
 

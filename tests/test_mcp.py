@@ -79,7 +79,12 @@ async def test_raw_protocol_harness_negotiation_errors_cancellation(tmp_path):
         await send("notifications/initialized")
         await send("tools/list", ident=2)
         tools = (await receive())["result"]["tools"]
-        assert tools[0]["inputSchema"]["properties"]["limit"]["maximum"] == 50
+        assert tools[0]["name"] == "search_mail"
+        await send(
+            "tools/call", {"name": "search_mail", "arguments": {"query": "flight", "limit": 51}}, 20
+        )
+        invalid_limit = await receive()
+        assert invalid_limit["id"] == 20 and invalid_limit["result"]["isError"]
         await send("tools/call", {"name": "search_mail", "arguments": {"query": "cancel-me"}}, 3)
         await asyncio.sleep(0.05)
         await send("notifications/cancelled", {"requestId": 3, "reason": "fixture"})
