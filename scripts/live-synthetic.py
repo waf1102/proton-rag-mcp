@@ -5,7 +5,7 @@ import json
 import os
 import time
 from pathlib import Path
-from proton_rag.anything import Anything
+from proton_rag.runtime import load_index
 from proton_rag.mailbox import Snapshot
 from proton_rag.sync import Catalog, synchronize
 from proton_rag.config import Settings
@@ -14,12 +14,12 @@ from proton_rag.config import Settings
 async def run():
     settings = Settings.from_env()
     if settings.workspace != "proton-fixtures":
-        raise ValueError("This fixture test requires ANYTHING_WORKSPACE=proton-fixtures")
+        raise ValueError("This fixture test requires QDRANT_COLLECTION=proton-fixtures")
     state = Path(os.environ["RAG_STATE_DIR"])
     state.mkdir(exist_ok=True, parents=True)
     catalog = Catalog(state / "catalog.db")
     assert all(r["synthetic"] for r in catalog.rows().values()), "Refuse mixed/live catalog"
-    backend = Anything(settings.anything_url, os.environ["ANYTHING_API_KEY"], settings.workspace)
+    backend = load_index(settings, catalog, writer=True)
     raw = b"Subject: Synthetic cobalt delivery\r\n\r\nThe cobalt shipment arrives Tuesday at warehouse violet shelf 12."
     raw2 = b"Subject: Synthetic zinc delivery\r\n\r\nThe zinc shipment arrives Friday at warehouse orange shelf 4."
     snapshot = Snapshot("1", {"7": raw, "8": raw2})

@@ -175,3 +175,42 @@ def test_bind_replaces_paths_only_in_target(tmp_path):
     bind_target(source.path, target.path, backend)
     assert json.loads(source.rows()[key]["paths"]) == ["custom-documents/old.json"]
     assert json.loads(target.rows()[key]["paths"]) == [key]
+
+
+def test_maintenance_lock_blocks_migration(tmp_path):
+    import fcntl
+
+    source, target, backend, key, text = fixture(tmp_path)
+    path = tmp_path / "export.jsonl"
+    write_export(path, [], profile=Embedder.profile)
+    with (target.path.parent / "maintenance.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(BlockingIOError):
+            import_index(source.path, path, target.path.parent, backend)
+    assert backend.state.entry(key) is None
+
+
+def test_verification_requires_imported_target(tmp_path, monkeypatch):
+    import sys
+    from proton_rag.migration import main
+
+    source, target, backend, key, text = fixture(tmp_path)
+    path = tmp_path / "export.jsonl"
+    write_export(path, [], profile=Embedder.profile)
+    destination = tmp_path / "absent"
+    monkeypatch.setattr(Settings, "from_env", lambda: Settings(state_dir=destination))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "proton-rag-migrate",
+            "verify",
+            "--source-catalog",
+            str(source.path),
+            "--export",
+            str(path),
+        ],
+    )
+    with pytest.raises(SystemExit):
+        main()
+    assert not (destination / "catalog.db").exists()

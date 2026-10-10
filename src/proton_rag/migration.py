@@ -11,7 +11,7 @@ import sqlite3
 from .catalog import Catalog
 from .config import Settings
 from .embeddings import EmbeddingProfile, Ollama, validate_vector
-from .index_state import IndexState
+from .index_state import IndexState, exclusive_state
 from .qdrant import QdrantIndex, ImportedChunk
 from .migration_report import fingerprint, readonly, save_report
 
@@ -189,6 +189,28 @@ def import_index(
     backend_database=None,
     reuse_verified=True,
 ):
+    with exclusive_state(target_state):
+        return _import_index(
+            source_catalog,
+            export_path,
+            target_state,
+            backend,
+            resume,
+            backend_database=backend_database,
+            reuse_verified=reuse_verified,
+        )
+
+
+def _import_index(
+    source_catalog,
+    export_path,
+    target_state,
+    backend,
+    resume=True,
+    *,
+    backend_database=None,
+    reuse_verified=True,
+):
     source_catalog, target_state = Path(source_catalog).resolve(), Path(target_state).resolve()
     if (
         source_catalog == backend.catalog.path.resolve()
@@ -298,6 +320,11 @@ def verify_target(source_catalog, target_catalog, backend):
 
 
 def bind_target(source_catalog, target_catalog, backend):
+    with exclusive_state(Path(target_catalog).parent):
+        return _bind_target(source_catalog, target_catalog, backend)
+
+
+def _bind_target(source_catalog, target_catalog, backend):
     report = verify_target(source_catalog, target_catalog, backend)
     with backend.catalog.connect() as db:
         for row in db.execute("SELECT key FROM index_messages WHERE phase='ready'").fetchall():
@@ -345,6 +372,8 @@ def main():
         profile = EmbeddingProfile(**header["profile"])
         settings.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         target = settings.state_dir / "catalog.db"
+        if args.command in ("verify", "bind") and not target.exists():
+            raise ValueError("Import the target before verification")
         if not target.exists():
             clone_catalog(args.source_catalog, target)
         catalog = Catalog(target)
@@ -357,7 +386,7 @@ def main():
             backend = QdrantIndex(
                 settings, catalog, state, embedder, key=os.environ.get("QDRANT_API_KEY", "")
             )
-            backend.bootstrap()
+            backend.bootstrap(create=args.command == "import")
             if args.command == "import":
                 reuse = False
                 if args.reuse_verification and not args.rebuild:

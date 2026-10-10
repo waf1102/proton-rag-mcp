@@ -12,7 +12,6 @@ TABLES = (
     "message_aliases",
     "folder_inventory",
     "orphan_marks",
-    "duplicate_cleanup",
     "catalog_settings",
 )
 

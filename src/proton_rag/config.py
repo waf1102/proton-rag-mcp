@@ -9,7 +9,6 @@ from pathlib import Path
 @dataclass(frozen=True)
 class Settings:
     state_dir: Path = Path.home() / ".local/share/proton-rag/mail"
-    anything_url: str = "http://127.0.0.1:3001"
     qdrant_url: str = "http://127.0.0.1:6333"
     ollama_url: str = "http://127.0.0.1:11434"
     embedding_model: str = "nomic-embed-text"
@@ -45,10 +44,9 @@ class Settings:
         values = {}
         names = {
             "state_dir": "RAG_STATE_DIR",
-            "anything_url": "ANYTHING_URL",
             "qdrant_url": "QDRANT_URL",
             "ollama_url": "OLLAMA_URL",
-            "workspace": "ANYTHING_WORKSPACE",
+            "workspace": "QDRANT_COLLECTION",
             "imap_host": "IMAP_HOST",
             "imap_port": "IMAP_PORT",
             "folders": "RAG_FOLDERS",
@@ -81,10 +79,6 @@ class Settings:
                     raise ValueError(f"{key} must not be empty")
                 values[field] = raw
         result = cls(**values)
-        if "QDRANT_COLLECTION" in env:
-            from dataclasses import replace
-
-            result = replace(result, workspace=env["QDRANT_COLLECTION"])
         from .index import local_url
 
         local_url(result.qdrant_url)

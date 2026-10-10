@@ -1,6 +1,9 @@
 """SQLite commit records for cross-store index writes and immutable bindings."""
 
 from dataclasses import asdict
+from contextlib import contextmanager
+import fcntl
+from pathlib import Path
 import hashlib
 import json
 from .embeddings import EmbeddingProfile
@@ -8,6 +11,16 @@ from .embeddings import EmbeddingProfile
 
 def text_hash(text):
     return hashlib.sha256(text.encode()).hexdigest()
+
+
+@contextmanager
+def exclusive_state(path):
+    """Use the same locks as ingestion and backup; never wait behind another writer."""
+    with (Path(path) / "maintenance.lock").open("a") as maintenance:
+        fcntl.flock(maintenance, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with (Path(path) / "daemon.lock").open("a") as writer:
+            fcntl.flock(writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            yield
 
 
 class IndexState:

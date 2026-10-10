@@ -83,10 +83,10 @@ def test_private_and_synthetic_datasets_cannot_mix(tmp_path):
 
 def test_parser_timeout_can_retry_without_pending_upload(tmp_path, monkeypatch):
     import proton_rag.sync as sync
-    from proton_rag.anything import Anything
 
     class RecoveringBackend(Backend):
-        recover = Anything.recover
+        def recover(self, key, text, before_upload=None):
+            return self.ensure(key, text, before_upload)
 
         def refresh(self):
             pass
@@ -151,21 +151,17 @@ def test_incremental_sync_fetches_new_uids_only(tmp_path):
     assert len(backend.docs) == 1
 
 
-def test_preupload_lookup_failure_can_retry(tmp_path):
-    from proton_rag.anything import Anything
+def test_preupload_failure_can_retry(tmp_path):
     from unittest.mock import Mock
 
-    backend = Anything("http://127.0.0.1:3001", "fixture")
-    backend.request = Mock(side_effect=ConnectionError("unavailable"))
+    backend = Backend()
+    original = backend.ensure
+    backend.ensure = Mock(side_effect=ConnectionError("unavailable"))
     catalog = Catalog(tmp_path / "state.db")
     snap = Snapshot("1", {"7": b"\nContent"})
     with pytest.raises(ConnectionError):
         synchronize(catalog, backend, snap)
-    backend.request.side_effect = [
-        {"localFiles": {"type": "folder", "name": "documents", "items": []}},
-        {"documents": [{"location": "custom-documents/mail.json"}]},
-        {"success": True},
-    ]
+    backend.ensure = original
     synchronize(catalog, backend, snap)
     assert next(iter(catalog.rows().values()))["active"] == 1
 

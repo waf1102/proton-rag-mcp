@@ -18,14 +18,16 @@ For real-service validation, provision a separate workspace/catalog, verify Brid
 
 Do not put email content, credentials, or provider response bodies in published validation evidence. Record counts, timings, pass/fail results and deployment limitations instead. Paid test limits belong to the external test runner, not application configuration.
 
-## Recorded validation (2026-10-08)
+## Qdrant validation (2026-10-09)
 
-The production implementation passed 41 unit/integration tests, Ruff checks, and the TypeScript MCP interoperability test. Live validation on the Podman host verified TLS, inventoried 12 Bridge folders, indexed read-only samples from all 11 non-empty folders, and confirmed mailbox flags were unchanged. Both Python and TypeScript SDK clients retrieved cited results. Two OpenRouter answer checks passed with citations matching retrieved sources.
+The isolated pinned Qdrant 1.19.2 server passed real dense/BM25 hybrid retrieval, deterministic retry, scoped deletion, paired snapshot download and restore verification into a distinct collection. Synthetic migration checks cover aliases, missing chunk rebuilds, interrupted imports, changed exports and bounded vector memory. A frozen Lance fixture exported 257 unique rows across three batches.
 
-The deployed MCP launcher exposes search and answer tools and successfully retrieves indexed real mail. Ollama and AnythingLLM restart checks passed. Full initial indexing runs in the background; the bounded validation does not claim the entire mailbox has already been indexed. Docker Compose configuration was validated, but full Docker and Fedora deployments were not exercised on this host.
+Runtime tests retain read-only IMAP, folder identity, duplicate message sharing, paging and MCP interoperability checks. New tests reject a changed embedding model, incomplete manifests, corrupt dense vectors, mismatched collection ownership and concurrent maintenance. Integration tests run in CI against the pinned server; local runs without `QDRANT_TEST_URL` skip those service tests explicitly.
 
-A live daemon interruption exposed AnythingLLM’s `.txt` title suffix; recovery now accepts that collector format. The interrupted upload was recovered without re-uploading, and the updated daemon stopped and restarted cleanly.
+For a local pinned server, run:
 
-## Full-message reading checks
+```sh
+QDRANT_TEST_URL=http://127.0.0.1:6333 uv run pytest -q
+```
 
-The full-message reading update passed 49 tests and both SDK interoperability checks. Live validation opened a 37,753-character indexed message across four pages, compared the assembled text with the stored document, exercised search followed by reading, and confirmed coverage remained incomplete. A read-only Bridge date search confirmed historical messages exist outside the indexed date range. No cloud generation or mailbox writes were used.
+Use an isolated test server. Integration tests create and delete uniquely named fixture collections. The live migration report is separate from fixture validation; full mailbox indexing remains an ongoing process. This VM uses rootless Podman; a full Docker or Fedora deployment and reboot have not been exercised here.

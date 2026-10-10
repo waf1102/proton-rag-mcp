@@ -1,7 +1,7 @@
 [Unit]
 Description=Proton Mail read-only indexing daemon
-After=proton-rag-anything.service proton-rag-ollama.service
-Requires=proton-rag-anything.service proton-rag-ollama.service
+After=proton-rag-qdrant.service proton-rag-ollama.service
+Requires=proton-rag-qdrant.service proton-rag-ollama.service
 
 [Service]
 Type=simple

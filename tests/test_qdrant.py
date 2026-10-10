@@ -241,3 +241,21 @@ def test_migrated_active_mail_is_not_refetched(tmp_path):
     synchronize_folder(catalog, backend, mailbox, "INBOX")
     mailbox.fetch.assert_not_called()
     assert service.points == before
+
+
+def test_verification_detects_corrupt_dense_vector(tmp_path):
+    catalog, state, backend, service = setup_index(tmp_path)
+    key = "proton-mail-" + "a" * 64
+    backend.ensure(key, "synthetic cobalt")
+    point = next(iter(service.points.values()))
+    point["vector"]["dense"] = [0.0, 1.0] + [0.0] * 766
+    with pytest.raises(IndexFailure):
+        backend.verify_message(key)
+
+
+def test_recovery_rejects_different_cached_text(tmp_path):
+    catalog, state, backend, service = setup_index(tmp_path)
+    key = "proton-mail-" + "a" * 64
+    backend.ensure(key, "synthetic cobalt")
+    with pytest.raises(ValueError, match="content"):
+        backend.recover(key, "changed text")

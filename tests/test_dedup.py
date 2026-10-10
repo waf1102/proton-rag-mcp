@@ -236,7 +236,7 @@ def test_new_copy_backfills_missing_text_without_embedding(tmp_path):
 
 
 def test_pending_upload_in_another_folder_is_not_blindly_replayed(tmp_path):
-    from proton_rag.anything import Anything, PendingUploadError
+    from proton_rag.index import PendingIndexError
 
     catalog = Catalog(tmp_path / "catalog.db")
     key = "proton-mail-" + "d" * 64
@@ -246,7 +246,10 @@ def test_pending_upload_in_another_folder_is_not_blindly_replayed(tmp_path):
     catalog.dispatched(key)
 
     class RecoveringBackend(Backend):
-        recover = Anything.recover
+        def recover(self, key, text, before_upload=None):
+            if key not in self.docs:
+                raise PendingIndexError()
+            return self.ensure(key, text, before_upload)
 
         def refresh(self):
             pass
@@ -255,7 +258,7 @@ def test_pending_upload_in_another_folder_is_not_blindly_replayed(tmp_path):
             return [key] if key in self.docs else []
 
     backend = RecoveringBackend()
-    with pytest.raises(PendingUploadError):
+    with pytest.raises(PendingIndexError):
         synchronize(catalog, backend, Snapshot("2", {"3": RAW}, folder="Labels/Work"))
     assert backend.docs == {} and backend.calls == 0
     assert len(catalog.rows()) == 2

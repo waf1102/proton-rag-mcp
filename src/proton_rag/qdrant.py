@@ -1,9 +1,12 @@
 """Loopback Qdrant search with deterministic writes and durable message commits."""
 
 import asyncio
+import base64
 from dataclasses import dataclass
 import json
 import re
+import math
+import struct
 import httpx
 from .chunks import split_text, point_id
 from .embeddings import ContextExceeded, validate_vector
@@ -130,7 +133,18 @@ class QdrantIndex:
                     or text_hash(payload.get("text", "")) != wanted["text_hash"]
                 ):
                     raise IndexFailure("index_incomplete", "verify")
-                validate_vector(point.get("vector", {}).get("dense"), self.state.profile.dimension)
+                dense = validate_vector(
+                    point.get("vector", {}).get("dense"), self.state.profile.dimension
+                )
+                norm = math.hypot(*dense)
+                expected_dense = struct.unpack(
+                    "<" + "f" * len(dense), base64.b64decode(wanted["dense_proof"])
+                )
+                if any(
+                    abs(actual / norm - expected) > 1e-6
+                    for actual, expected in zip(dense, expected_dense, strict=True)
+                ):
+                    raise IndexFailure("index_incomplete", "verify")
         return True
 
     def _write(self, key, text, chunks, before_upload=None):
@@ -145,6 +159,7 @@ class QdrantIndex:
         metadata = json.loads(row["metadata"]) if row else {}
         for ordinal, chunk in enumerate(chunks):
             vector = validate_vector(chunk.vector, self.state.profile.dimension)
+            norm = math.hypot(*vector)
             identity = point_id(
                 self.catalog.namespace, key, self.state.profile.identity, chunk.identity
             )
@@ -152,7 +167,14 @@ class QdrantIndex:
                 json.dumps([chunk.text, vector, self.state.profile.identity], separators=(",", ":"))
             )
             manifest.append(
-                {"id": identity, "checksum": checksum, "text_hash": text_hash(chunk.text)}
+                {
+                    "id": identity,
+                    "checksum": checksum,
+                    "text_hash": text_hash(chunk.text),
+                    "dense_proof": base64.b64encode(
+                        struct.pack("<" + "f" * len(vector), *(v / norm for v in vector))
+                    ).decode(),
+                }
             )
             lexical = (
                 "\n".join(str(metadata.get(f, "")) for f in ["subject", "from"]) + "\n" + chunk.text
@@ -217,7 +239,10 @@ class QdrantIndex:
 
     def recover(self, key, text, before_upload=None):
         # Pending writes can be proven complete without doing expensive embedding again.
-        if self.state.entry(key):
+        entry = self.state.entry(key)
+        if entry:
+            if entry["text_hash"] != text_hash(text):
+                raise ValueError("Message content differs from committed index")
             try:
                 self.verify_message(key)
                 self.state.finish(key)

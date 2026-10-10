@@ -40,6 +40,7 @@ def validate_vector(vector, dimension):
 
 
 def model_digest(url, model, client=None):
+    owned = client is None
     client = client or httpx.Client(timeout=10, trust_env=False)
     try:
         response = client.get(local_url(url) + "/api/tags")
@@ -55,6 +56,9 @@ def model_digest(url, model, client=None):
         raise
     except Exception:
         raise IndexFailure("embedding_profile", "embed") from None
+    finally:
+        if owned:
+            client.close()
 
 
 class Ollama:
