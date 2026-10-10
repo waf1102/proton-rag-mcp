@@ -44,7 +44,7 @@ def status(catalog):
         ready = db.execute(
             "SELECT value FROM catalog_settings WHERE name='lexical_ready'"
         ).fetchone()
-        count = db.execute("SELECT COUNT(*) FROM mail_fts").fetchone()[0]
+        count = db.execute("SELECT COUNT(*) FROM mail_fts_docsize").fetchone()[0]
     return {"lexical_ready": bool(ready and ready[0] == "1"), "lexical_messages": count}
 
 
