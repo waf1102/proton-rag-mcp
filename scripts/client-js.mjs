@@ -17,6 +17,7 @@ try {
   assert.equal(tools[0].annotations.readOnlyHint, true);
   const result = await client.callTool({name: 'search_mail', arguments: {query: process.env.RAG_INTEROP_QUERY || 'When does cobalt arrive?'}});
   assert.equal(result.isError, false);
+  assert.deepEqual(result.structuredContent, JSON.parse(result.content[0].text));
   if (!process.env.RAG_INTEROP_QUERY) assert.match(JSON.stringify(result), /Tuesday/);
   assert.match(JSON.stringify(result), /imap:\/\/\//);
   const hit = JSON.parse(result.content[0].text).sources[0];
@@ -25,11 +26,19 @@ try {
   if (!live) assert.match(JSON.stringify(full), /ABC123/);
   const batch = await client.callTool({name: 'read_mail_batch', arguments: {requests: [{message_id: hit.message_id, length: 128}, {message_id: 'unknown-fixture'}]}});
   assert.equal(batch.isError, false);
-  assert.ok(Buffer.byteLength(batch.content[0].text, 'utf8') <= 8192);
+  assert.ok(Buffer.byteLength(batch.content[0].text, 'utf8') <= 3900);
   const messages = JSON.parse(batch.content[0].text).messages;
   assert.equal(messages[0].message_id, hit.message_id);
   assert.equal(messages[0].offset, 0);
   assert.ok(messages[1].error);
+  const alias = await client.callTool({name: 'read_mail_batch', arguments: {message_ids: [hit.message_id]}});
+  assert.equal(alias.isError, false);
+  const page = JSON.parse(alias.content[0].text);
+  if (page.next_call) {
+    const following = await client.callTool({name: page.next_call.tool, arguments: page.next_call.arguments});
+    assert.equal(following.isError, false);
+    assert.equal(JSON.parse(following.content[0].text).messages[0].offset, page.messages[0].next_offset);
+  }
   const status = await client.callTool({name: 'index_status', arguments: {}});
   assert.equal(status.isError, false);
   const bad = await client.callTool({name: 'search_mail', arguments: {query: '', limit: 99}});

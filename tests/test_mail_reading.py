@@ -24,6 +24,8 @@ def seed(catalog):
 
 async def call(server, name, args):
     result = await server.call_tool(name, args)
+    if hasattr(result, "content"):
+        return json.loads(result.content[0].text)
     return (
         json.loads(result[0][0].text) if isinstance(result, tuple) else json.loads(result[0].text)
     )

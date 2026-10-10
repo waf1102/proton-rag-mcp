@@ -14,9 +14,13 @@ import time
 BUDGET = 3900
 
 
+def serialize(value):
+    """The exact MCP text representation; retain native Unicode and all JSON fields."""
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
 def wire_size(value):
-    # Conservative for both SDK JSON serializers (escaping Unicode costs more).
-    return len(json.dumps(value, ensure_ascii=True, indent=2).encode())
+    return len(serialize(value).encode())
 
 
 def filters(sent_after=None, sent_before=None, sender=None, subject=None, folder=None):
@@ -108,7 +112,7 @@ class Pages:
                 raise ValueError()
             s = self.sessions[raw[:12].hex()]
             offset = int.from_bytes(raw[12:], "big")
-            if s.signature != signature or offset > len(s.keys):
+            if (signature is not None and s.signature != signature) or offset > len(s.keys):
                 raise ValueError()
             return s, offset
         except (ValueError, KeyError, OverflowError):

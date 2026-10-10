@@ -6,6 +6,7 @@ from proton_rag.catalog import Catalog
 from proton_rag.config import Settings
 from proton_rag.mcp_server import build, search
 from proton_rag.mailbox import Inventory
+from proton_rag.retrieval import BUDGET, wire_size
 from test_mail_reading import call
 
 
@@ -75,7 +76,7 @@ async def test_compact_rank_42_is_reachable_without_truncation(tmp_path):
     found = []
     page = await call(server, "search_mail", args)
     while True:
-        assert len(json.dumps(page, indent=2).encode()) <= 8192
+        assert wire_size(page) <= BUDGET
         for hit in page["sources"]:
             assert len(hit["text"]) <= 300
             assert "locations" not in hit
@@ -175,7 +176,7 @@ async def test_batch_unicode_paging_and_individual_errors(tmp_path):
                 ]
             },
         )
-        assert len(json.dumps(page, indent=2).encode()) <= 8192
+        assert wire_size(page) <= BUDGET
         for result in page["messages"]:
             key = result["message_id"]
             assert result["offset"] == offsets[key]
@@ -343,5 +344,161 @@ async def test_pages_stay_below_gemini_inline_threshold(tmp_path):
         ),
     ]:
         result = await server.call_tool(tool, args)
-        content = result[0] if isinstance(result, tuple) else result
+        content = (
+            result.content
+            if hasattr(result, "content")
+            else result[0]
+            if isinstance(result, tuple)
+            else result
+        )
         assert len(content[0].text.encode()) < 4000
+
+
+def test_filtered_candidates_stay_within_linear_sql_work(tmp_path, monkeypatch):
+    """Catch correlated scans of every active location for every candidate."""
+    from proton_rag import lexical
+    from proton_rag.retrieval import filters
+
+    catalog = Catalog(tmp_path / "catalog.db")
+    keys = seed(catalog, 400)
+    original_connect = catalog.connect
+    calls = [0]
+
+    def bounded_connect():
+        db = original_connect()
+
+        def progress():
+            calls[0] += 1
+            return int(calls[0] > 1000)
+
+        db.set_progress_handler(progress, 100)
+        return db
+
+    monkeypatch.setattr(catalog, "connect", bounded_connect)
+    assert lexical.candidates(catalog, "", filters("2018-01-01", "2019-01-01"), exact=False) == keys
+
+
+async def test_search_continuation_needs_only_returned_next_call(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    keys = seed(catalog, 5)
+    server = build(catalog, Ranked(keys))
+    first = await call(
+        server, "search_mail", {"query": "3366", "mode": "exact", "limit": 1, "folder": "INBOX"}
+    )
+    found = [h["message_id"] for h in first["sources"]]
+    page = first
+    while page["has_more"]:
+        assert page["next_call"]["tool"] == "search_mail"
+        assert page["next_call"]["arguments"] == {"cursor": page["next_cursor"]}
+        assert page["remaining_count"] == len(keys) - len(found)
+        page = await call(server, "search_mail", page["next_call"]["arguments"])
+        found.extend(h["message_id"] for h in page["sources"])
+    assert found == keys
+    assert page["next_call"] is None and page["remaining_count"] == 0
+    with pytest.raises(Exception, match="cursor|Cursor"):
+        await server.call_tool("search_mail", {"cursor": first["next_cursor"], "folder": "Archive"})
+
+
+async def test_batch_accepts_simple_ids_and_continuation_call(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    text = "Trip itinerary 🦊\n" * 200
+    keys = seed(catalog, text=text)
+    server = build(catalog, object())
+    page = await call(server, "read_mail_batch", {"message_ids": keys})
+    recovered = ""
+    while True:
+        body = page["messages"][0]
+        recovered += body["text"]
+        if body["next_offset"] is None:
+            assert page["next_call"] is None
+            break
+        assert page["next_call"]["tool"] == "read_mail_batch"
+        page = await call(server, "read_mail_batch", page["next_call"]["arguments"])
+    assert recovered == text
+    with pytest.raises(Exception, match="either|both|Choose"):
+        await server.call_tool(
+            "read_mail_batch", {"message_ids": keys, "requests": [{"message_id": keys[0]}]}
+        )
+
+
+async def test_cursor_only_retains_folder_predicate_after_membership_removed(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    keys = seed(catalog, 3)
+    catalog.intent("archived-copy", "Archive", "1", "99", "1", False, {})
+    catalog.activate("archived-copy", [])
+    server = build(catalog, Ranked(keys))
+    page = await call(
+        server, "search_mail", {"query": "3366", "mode": "exact", "limit": 1, "folder": "INBOX"}
+    )
+    catalog.forget(keys[1])
+    page = await call(server, "search_mail", {"cursor": page["next_cursor"]})
+    assert [h["message_id"] for h in page["sources"]] == [keys[2]]
+
+
+@pytest.mark.parametrize("count", [1, 3, 5])
+async def test_batch_next_calls_preserve_every_character_inside_wire_budget(tmp_path, count):
+    from proton_rag.retrieval import BUDGET, wire_size
+
+    catalog = Catalog(tmp_path / "catalog.db")
+    text = "日本語\n 🦊 AB" * 110
+    keys = seed(catalog, count, text=text)
+    server = build(catalog, object())
+    page = await call(server, "read_mail_batch", {"message_ids": keys})
+    recovered = {key: "" for key in keys}
+    rounds = 0
+    while True:
+        assert wire_size(page) <= BUDGET
+        for body in page["messages"]:
+            assert "error" not in body
+            recovered[body["message_id"]] += body["text"]
+        if page["next_call"] is None:
+            break
+        rounds += 1
+        assert rounds < 150
+        page = await call(server, "read_mail_batch", page["next_call"]["arguments"])
+    assert all(value == text for value in recovered.values())
+
+
+async def test_compact_wire_preserves_structured_data_and_fits_more_evidence(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    keys = seed(catalog, 8, text="flight " + "evidence " * 50)
+    server = build(catalog, Ranked(keys))
+    result = await server.call_tool("search_mail", {"query": "flight", "limit": 8})
+    if hasattr(result, "content"):
+        contents, structured = result.content, result.structuredContent
+    elif isinstance(result, tuple):
+        contents, structured = result
+    else:
+        contents, structured = result, None
+    page = json.loads(contents[0].text)
+    assert len(contents[0].text.encode()) < 3900
+    assert len(page["sources"]) >= 5
+    assert page == structured
+    assert [h["message_id"] for h in page["sources"]] == keys[: len(page["sources"])]
+
+
+async def test_batch_cursor_errors_retain_original_request_index(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    keys = seed(catalog, 2, text="x" * 10000)
+    catalog.store_text(keys[0], "short", [], False)
+    server = build(catalog, object())
+    page = await call(server, "read_mail_batch", {"message_ids": keys})
+    assert page["messages"][0]["next_offset"] is None
+    assert page["messages"][1]["next_offset"] is not None
+    catalog.retire(keys[1])
+    page = await call(server, "read_mail_batch", page["next_call"]["arguments"])
+    assert page["messages"][0]["error"]
+    assert page["messages"][0]["request_index"] == 1
+
+
+async def test_exact_ranks_direct_evidence_before_incidental_long_mail(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    keys = seed(catalog, 2, text="Unrelated newsletter " * 1000 + " flight")
+    catalog.store_text(keys[1], "Flight itinerary: flight AA 3366 departs Chicago.", [], False)
+    server = build(catalog, Ranked(keys))
+    result = await call(server, "search_mail", {"query": "flight", "mode": "exact", "limit": 1})
+    assert result["sources"][0]["message_id"] == keys[1]
+    assert result["match_count"] == 2
+    result = await call(server, "search_mail", result["next_call"]["arguments"])
+    assert result["sources"][0]["message_id"] == keys[0]
+    assert result["has_more"] is False
