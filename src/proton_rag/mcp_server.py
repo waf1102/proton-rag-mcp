@@ -7,7 +7,7 @@ from urllib.parse import quote, unquote, urlsplit
 from pydantic import Field
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
-from .anything import Anything
+from .runtime import load_index
 from .config import Settings
 from .generation import answer
 from .sync import Catalog
@@ -192,8 +192,8 @@ def main():
     os.umask(0o077)
     settings = Settings.from_env()
     settings.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    backend = Anything(settings.anything_url, os.environ["ANYTHING_API_KEY"], settings.workspace)
     catalog = Catalog(settings.state_dir / "catalog.db")
+    backend = load_index(settings, catalog)
     catalog.bind_workspace(settings.workspace)
     build(
         catalog,

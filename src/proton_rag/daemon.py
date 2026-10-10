@@ -8,7 +8,7 @@ import os
 import signal
 import threading
 from pathlib import Path
-from .anything import Anything
+from .runtime import load_index
 from .config import Settings
 from .mailbox import Mailbox, Snapshot
 from .sync import Catalog, synchronize, synchronize_folder, cleanup_duplicates, collect_orphans
@@ -44,13 +44,8 @@ def main():
         stop = threading.Event()
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, lambda *_: stop.set())
-        backend = Anything(
-            settings.anything_url,
-            os.environ["ANYTHING_API_KEY"],
-            settings.workspace,
-            embedding_timeout=settings.embedding_timeout,
-        )
         catalog = Catalog(settings.state_dir / "catalog.db", writer=True)
+        backend = load_index(settings, catalog, writer=True)
         backoff = 2
         while not stop.is_set():
             mailbox = None

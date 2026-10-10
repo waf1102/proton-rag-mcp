@@ -20,6 +20,10 @@ class IndexState:
             "profile": asdict(profile),
         }
         with catalog.connect() as db:
+            exists = db.execute("SELECT 1 FROM sqlite_master WHERE name='index_binding'").fetchone()
+            nonempty = db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+            if not exists and nonempty and not allow_existing:
+                raise ValueError("Existing catalog requires verified index migration and binding")
             db.execute(
                 "CREATE TABLE IF NOT EXISTS index_binding (id INTEGER PRIMARY KEY CHECK(id=1), binding TEXT, published INTEGER)"
             )
@@ -33,7 +37,6 @@ class IndexState:
                         "Index binding differs from catalog; migrate into a separate target"
                     )
             else:
-                nonempty = db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
                 if nonempty and not allow_existing:
                     raise ValueError(
                         "Existing catalog requires verified index migration and binding"

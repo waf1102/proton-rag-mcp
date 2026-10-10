@@ -52,12 +52,14 @@ class QdrantIndex:
         except Exception:
             raise IndexFailure("index_response", operation) from None
 
-    def bootstrap(self):
+    def bootstrap(self, *, create=True):
         try:
             result = self.request("GET", "")
         except IndexFailure as error:
             if error.diagnostic.get("http_status") != 404:
                 raise
+            if not create:
+                raise ValueError("Configured Qdrant collection is missing") from None
             self.request(
                 "PUT",
                 "",
@@ -87,9 +89,10 @@ class QdrantIndex:
         metadata = result.get("config", {}).get("metadata", params.get("metadata", {})) or {}
         if metadata.get("proton_rag_binding") != self.state.binding:
             raise ValueError("Collection binding mismatch")
-        self.request(
-            "PUT", "/index?wait=true", {"field_name": "message_id", "field_schema": "keyword"}
-        )
+        if create:
+            self.request(
+                "PUT", "/index?wait=true", {"field_name": "message_id", "field_schema": "keyword"}
+            )
 
     @staticmethod
     def _filter(key):

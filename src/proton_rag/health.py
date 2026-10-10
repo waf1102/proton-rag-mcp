@@ -7,7 +7,7 @@ import shutil
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
-from .anything import IndexError, PendingUploadError
+from .index import IndexFailure, PendingIndexError
 from .mailbox import SnapshotError
 
 
@@ -16,9 +16,9 @@ class DiskLowError(RuntimeError):
 
 
 def diagnostic(error):
-    if isinstance(error, IndexError):
+    if isinstance(error, IndexFailure):
         return error.diagnostic
-    if isinstance(error, PendingUploadError):
+    if isinstance(error, PendingIndexError):
         return {"code": "upload_reconciliation", "operation": "upload"}
     if isinstance(error, DiskLowError):
         return {"code": "low_disk", "operation": "storage"}

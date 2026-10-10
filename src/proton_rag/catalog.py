@@ -173,6 +173,25 @@ class Catalog:
                 "AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.message_key=m.key)"
             ).fetchone()[0]
             cleanup_pending = db.execute("SELECT COUNT(*) FROM duplicate_cleanup").fetchone()[0]
+            index_status = {}
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='index_binding'").fetchone():
+                binding = db.execute("SELECT binding FROM index_binding WHERE id=1").fetchone()
+                if binding:
+                    from .embeddings import EmbeddingProfile
+
+                    saved = json.loads(binding[0])
+                    ready = db.execute(
+                        "SELECT COUNT(*) FROM index_messages WHERE phase='ready'"
+                    ).fetchone()[0]
+                    pending_index = db.execute(
+                        "SELECT COUNT(*) FROM index_messages WHERE phase!='ready'"
+                    ).fetchone()[0]
+                    index_status = {
+                        "index_backend": saved["backend"],
+                        "index_ready_messages": ready,
+                        "index_pending_messages": pending_index,
+                        "embedding_profile": EmbeddingProfile(**saved["profile"]).identity,
+                    }
         folders = (
             json.loads(scope[0])
             if scope
@@ -216,6 +235,7 @@ class Catalog:
                 pass
         known = bool(scope) and all(r["expected"] is not None for r in reports)
         return {
+            **index_status,
             "runtime": json.loads(runtime[0]) if runtime else {"state": "unknown"},
             "coverage_complete": known and all(r["complete"] for r in reports),
             "folder_entries_expected": sum(r["expected"] for r in reports) if known else None,

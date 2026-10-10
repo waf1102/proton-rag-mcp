@@ -197,3 +197,43 @@ def test_manifest_is_not_ready_after_partial_batch(tmp_path):
     backend.recover(key, "Cobalt sentence. " * 5000)
     assert state.ready(key)
     assert len(service.points) == len(state.entry(key)["points"])
+
+
+def test_existing_unbound_catalog_is_rejected_without_schema_changes(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    catalog.intent("proton-mail-" + "a" * 64, "INBOX", "1", "7", "digest", False, {})
+    with catalog.connect() as db:
+        before = set(r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'"))
+    with pytest.raises(ValueError, match="migration"):
+        IndexState(catalog, "proton-mail", Embedder.profile)
+    with catalog.connect() as db:
+        after = set(r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'"))
+    assert after == before
+
+
+async def test_index_readiness_is_separate_from_mailbox_coverage(tmp_path):
+    from proton_rag.mcp_server import build
+    from test_mail_reading import call
+
+    catalog, state, backend, service = setup_index(tmp_path)
+    key = "proton-mail-" + "a" * 64
+    backend.ensure(key, "invoice")
+    report = await call(build(catalog, backend), "index_status", {})
+    assert report["index_backend"] == "qdrant"
+    assert report["index_ready_messages"] == 1
+    assert report["coverage_complete"] is False
+
+
+def test_migrated_active_mail_is_not_refetched(tmp_path):
+    from proton_rag.sync import synchronize, synchronize_folder
+    from proton_rag.mailbox import Snapshot, Inventory
+    from unittest.mock import Mock
+    catalog, state, backend, service = setup_index(tmp_path)
+    raw = b'Subject: Invoice\n\nCobalt invoice AX9385'
+    synchronize(catalog, backend, Snapshot('1', {'7': raw}))
+    before = dict(service.points)
+    mailbox = Mock()
+    mailbox.inventory.return_value = Inventory('INBOX', '1', ('7',))
+    synchronize_folder(catalog, backend, mailbox, 'INBOX')
+    mailbox.fetch.assert_not_called()
+    assert service.points == before
