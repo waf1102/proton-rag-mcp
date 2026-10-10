@@ -30,4 +30,4 @@ For a local pinned server, run:
 QDRANT_TEST_URL=http://127.0.0.1:6333 uv run pytest -q
 ```
 
-Use an isolated test server. Integration tests create and delete uniquely named fixture collections. The live migration report is separate from fixture validation; full mailbox indexing remains an ongoing process. This VM uses rootless Podman; a full Docker or Fedora deployment and reboot have not been exercised here.
+Use an isolated test server. Integration tests create and delete uniquely named fixture collections. The [completed live migration report](qdrant-migration-validation.md) records the 124-test run, verified transfer, cutover, and full backup restoration separately from fixture validation. Full mailbox indexing remains an ongoing process. This VM uses rootless Podman; a full Docker or Fedora deployment and reboot have not been exercised here.
