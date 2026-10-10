@@ -43,6 +43,7 @@ class IndexState:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS index_messages (key TEXT PRIMARY KEY, text_hash TEXT, points TEXT, phase TEXT, revision TEXT)"
             )
+            db.execute("CREATE INDEX IF NOT EXISTS index_message_phases ON index_messages(phase)")
             db.execute(
                 "CREATE TABLE IF NOT EXISTS index_replay (key TEXT PRIMARY KEY, points TEXT)"
             )
@@ -98,6 +99,15 @@ class IndexState:
                     value["points"] = json.loads(value["points"])
                     result[row["key"]] = value
         return result
+
+    def phases(self, keys):
+        if not keys:
+            return {}
+        marks = ",".join("?" for _ in keys)
+        with self.catalog.connect() as db:
+            return dict(
+                db.execute(f"SELECT key,phase FROM index_messages WHERE key IN ({marks})", keys)
+            )
 
     def ready(self, key):
         value = self.entry(key)

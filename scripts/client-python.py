@@ -28,7 +28,12 @@ async def run():
         async with ClientSession(r, w) as client:
             init = await client.initialize()
             tools = await client.list_tools()
-            assert [t.name for t in tools.tools] == ["search_mail", "index_status", "read_mail"]
+            assert [t.name for t in tools.tools] == [
+                "search_mail",
+                "index_status",
+                "read_mail",
+                "read_mail_batch",
+            ]
             result = await client.call_tool(
                 "search_mail",
                 {"query": os.environ.get("RAG_INTEROP_QUERY", "When does cobalt arrive?")},

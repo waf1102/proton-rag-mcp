@@ -295,7 +295,9 @@ class QdrantIndex:
     def refresh(self):
         self.embedder.check_profile()
 
-    async def search(self, query, limit):
+    async def search(self, query, limit, *, message_ids=None):
+        if message_ids is not None and not message_ids:
+            return []
         vector = await self.embedder.embed_query(query)
         # Groups prevent a message with many chunks from crowding out other messages.
         data = {
@@ -313,11 +315,18 @@ class QdrantIndex:
             "limit": min(limit * 2, 100),
             "with_payload": True,
         }
+        if message_ids is not None:
+            selected = {"must": [{"key": "message_id", "match": {"any": message_ids}}]}
+            data["filter"] = selected
+            for item in data["prefetch"]:
+                item["filter"] = selected
         result = await asyncio.to_thread(
             self.request, "POST", "/points/query/groups", data, operation="search"
         )
         keys = [group["id"] for group in result["groups"]]
         active = self.catalog.active_keys(keys)
+        if message_ids is not None:
+            active.intersection_update(message_ids)
         manifests = self.state.entries(keys)
         hits = []
         for group in result["groups"]:

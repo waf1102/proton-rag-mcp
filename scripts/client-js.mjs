@@ -13,7 +13,7 @@ const transport = new StdioClientTransport({
 try {
   await client.connect(transport);
   const {tools} = await client.listTools();
-  assert.deepEqual(tools.map(t => t.name), ['search_mail', 'index_status', 'read_mail']);
+  assert.deepEqual(tools.map(t => t.name), ['search_mail', 'index_status', 'read_mail', 'read_mail_batch']);
   assert.equal(tools[0].annotations.readOnlyHint, true);
   const result = await client.callTool({name: 'search_mail', arguments: {query: process.env.RAG_INTEROP_QUERY || 'When does cobalt arrive?'}});
   assert.equal(result.isError, false);

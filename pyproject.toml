@@ -13,6 +13,7 @@ dependencies = ["mcp>=1.26,<2", "httpx>=0.28,<1", "pypdf>=6,<7", "python-docx>=1
 proton-rag = "proton_rag.daemon:main"
 proton-rag-mcp = "proton_rag.mcp_server:main"
 proton-rag-migrate = "proton_rag.migration:main"
+proton-rag-lexical = "proton_rag.lexical:main"
 proton-rag-backup = "proton_rag.backup:main"
 
 [dependency-groups]

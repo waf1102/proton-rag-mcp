@@ -245,12 +245,15 @@ Ask your assistant:
 
 | Tool | What it does | Needs OpenRouter? |
 | --- | --- | --- |
-| `search_mail` | Finds indexed messages and returns excerpts, metadata, and citations. | No |
+| `search_mail` | Finds messages with compact previews, filters, and citations; exact mode can list every matching indexed email. | No |
 | `read_mail` | Opens full extracted message and attachment text by ID; follows pages for long messages. | No |
+| `read_mail_batch` | Reads up to five messages in compact pages, with separate continuation offsets. | No |
 | `index_status` | Reports indexing progress, indexed dates, and incomplete folder coverage. | No |
 | `answer_mail` | Generates an answer from selected excerpts, with citations. | Yes |
 
-For extraction tasks, ask the assistant to search first, then call `read_mail` with the result’s `message_id` and follow `next_offset` until it is `null`. `index_status` separates unique indexed emails from folder/label entry counts. Check it before drawing conclusions about older mail: an incomplete index cannot establish that no older messages exist. Search returns relevance-ranked results, so its hit count is not an exhaustive mailbox count.
+For extraction tasks, ask the assistant to search first, then call `read_mail` with the result’s `message_id` and follow `next_offset` until it is `null`. `index_status` separates unique indexed emails from folder/label entry counts. Check it before drawing conclusions about older mail: an incomplete index cannot establish that no older messages exist. Hybrid search ranks a limited set of results. For requests such as “find every receipt,” use **exact mode** and follow `next_cursor` until `has_more` is `false`. Exact mode supports words, quoted phrases, and `AND` / `OR` / `NOT`. It enumerates matching indexed text; it cannot infer every possible meaning of a question.
+
+For example, ask: “Search in exact mode for `\"American Airlines\"`, then read the matching emails and extract their flight numbers.” Sender, subject, folder, and date filters can narrow the results. Date filters refer to **when the email was sent**; a flight in 2018 may appear in an email sent in 2017. [Search examples and pagination →](docs/retrieval.md)
 
 Citations identify messages in your index; they are not clickable Proton Mail links. PDF and DOCX text extraction is supported; scanned images need OCR before their text can be searched.
 

@@ -63,6 +63,9 @@ class Catalog:
                             ) from None
                         self._migrate(db)
             db.execute(
+                "CREATE INDEX IF NOT EXISTS coverage_locations ON documents(active,folder,validity,message_key)"
+            )
+            db.execute(
                 "CREATE TABLE IF NOT EXISTS folder_inventory "
                 "(folder TEXT PRIMARY KEY, validity TEXT, total INTEGER, fingerprint TEXT, "
                 "observed_at TEXT, successful INTEGER)"
@@ -79,6 +82,10 @@ class Catalog:
                 "INSERT INTO message_dates VALUES (?,?,?)",
                 [(r["key"], *self._date(json.loads(r["metadata"]))) for r in missing],
             )
+
+            from .lexical import initialize
+
+            initialize(db)
 
     @staticmethod
     def _date(metadata):
@@ -199,12 +206,13 @@ class Catalog:
             params = (json.dumps(folders),)
             counts = db.execute(
                 selected
-                + """SELECT COUNT(*) AS entries,
-                COUNT(DISTINCT d.message_key) AS unique_count,
-                COUNT(t.key) AS cached,COUNT(DISTINCT t.key) AS unique_cached,
-                MIN(md.day) AS earliest,MAX(md.day) AS latest
-                FROM selected d LEFT JOIN message_text t ON t.key=d.message_key
-                LEFT JOIN message_dates md ON md.key=d.message_key WHERE d.active=1""",
+                + """, canonical AS (SELECT message_key,COUNT(*) AS memberships FROM selected
+                WHERE active=1 GROUP BY message_key)
+                SELECT coalesce(SUM(c.memberships),0) AS entries, COUNT(*) AS unique_count,
+                coalesce(SUM(CASE WHEN t.key IS NOT NULL THEN c.memberships ELSE 0 END),0) AS cached,
+                COUNT(t.key) AS unique_cached, MIN(md.day) AS earliest,MAX(md.day) AS latest
+                FROM canonical c LEFT JOIN message_text t ON t.key=c.message_key
+                LEFT JOIN message_dates md ON md.key=c.message_key""",
                 params,
             ).fetchone()
             folder_counts = {
@@ -301,6 +309,7 @@ class Catalog:
     def connect(self):
         db = sqlite3.connect(self.path, timeout=30)
         db.row_factory = sqlite3.Row
+        db.create_function("casefold", 1, lambda s: str(s).casefold(), deterministic=True)
         return db
 
     @staticmethod
@@ -344,7 +353,32 @@ class Catalog:
         return groups, aliases
 
     def active_keys(self, keys):
-        return set(self.locations(keys)[0])
+        active = set()
+        keys = list(set(keys))
+        with self.connect() as db:
+            for offset in range(0, len(keys), 400):
+                batch = keys[offset : offset + 400]
+                marks = ",".join("?" for _ in batch)
+                active.update(
+                    r[0]
+                    for r in db.execute(
+                        f"SELECT DISTINCT message_key FROM documents WHERE active=1 AND message_key IN ({marks})",
+                        batch,
+                    )
+                )
+        return active
+
+    def texts(self, keys):
+        if not keys:
+            return {}
+        marks = ",".join("?" for _ in keys)
+        with self.connect() as db:
+            return {
+                r["key"]: r["text"]
+                for r in db.execute(
+                    f"SELECT key,text FROM message_text WHERE key IN ({marks})", keys
+                )
+            }
 
     def message(self, key=None, identity=None):
         with self.connect() as db:
