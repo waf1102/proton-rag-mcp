@@ -297,7 +297,6 @@ class QdrantIndex:
 
     async def search(self, query, limit):
         vector = await self.embedder.embed_query(query)
-        active = {row["message_key"] for row in self.catalog.rows().values() if row["active"]}
         # Groups prevent a message with many chunks from crowding out other messages.
         data = {
             "prefetch": [
@@ -317,12 +316,15 @@ class QdrantIndex:
         result = await asyncio.to_thread(
             self.request, "POST", "/points/query/groups", data, operation="search"
         )
+        keys = [group["id"] for group in result["groups"]]
+        active = self.catalog.active_keys(keys)
+        manifests = self.state.entries(keys)
         hits = []
         for group in result["groups"]:
             key = group["id"]
-            if key not in active or not self.state.ready(key):
+            entry = manifests.get(key)
+            if key not in active or not entry or entry["phase"] != "ready":
                 continue
-            entry = self.state.entry(key)
             ids = {p["id"]: p for p in entry["points"]}
             for point in group["hits"]:
                 payload = point["payload"]

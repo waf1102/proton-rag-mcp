@@ -18,17 +18,9 @@ def citation(row):
 
 
 async def search(catalog, backend, query, limit, settings):
-    # Overfetch to compensate for chunks and messages present in multiple folders.
-    results = await backend.search(query, settings.search_max)
-    rows = catalog.rows()
-    groups, aliases = {}, {}
-    for row in rows.values():
-        if not row["active"]:
-            continue
-        canonical = row.get("message_key", row["key"])
-        groups.setdefault(canonical, []).append(row)
-        aliases[row["key"]] = canonical
-        aliases[canonical] = canonical
+    results = await backend.search(query, limit)
+    keys = [item.get("metadata", {}).get("docSource") for item in results]
+    groups, aliases = catalog.locations([key for key in keys if key])
     hits, seen = [], set()
     for item in results:
         source = item.get("metadata", {}).get("docSource")

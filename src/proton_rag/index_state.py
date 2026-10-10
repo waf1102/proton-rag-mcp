@@ -84,6 +84,21 @@ class IndexState:
             value["points"] = json.loads(value["points"])
             return value
 
+    def entries(self, keys):
+        result = {}
+        keys = list(set(keys))
+        with self.catalog.connect() as db:
+            for offset in range(0, len(keys), 400):
+                batch = keys[offset : offset + 400]
+                marks = ",".join("?" for _ in batch)
+                for row in db.execute(
+                    f"SELECT * FROM index_messages WHERE key IN ({marks})", batch
+                ):
+                    value = dict(row)
+                    value["points"] = json.loads(value["points"])
+                    result[row["key"]] = value
+        return result
+
     def ready(self, key):
         value = self.entry(key)
         return bool(value and value["phase"] == "ready")
