@@ -125,12 +125,14 @@ def candidates(catalog, query, filters, *, exact=True, max_bytes=64 * 1024 * 102
     if exact and query.strip():
         where += " AND mail_fts MATCH ?"
         args.append(query)
+    order = "bm25(mail_fts,0,5,2,1),m.key" if exact and query.strip() else "m.key"
     sql = (
         "SELECT m.key FROM messages m LEFT JOIN message_dates md ON md.key=m.key"
         + join
         + " WHERE "
         + where
-        + " ORDER BY m.key"
+        + " ORDER BY "
+        + order
     )
     ids, size = [], 0
     try:

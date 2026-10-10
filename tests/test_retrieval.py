@@ -475,3 +475,30 @@ async def test_compact_wire_preserves_structured_data_and_fits_more_evidence(tmp
     assert len(page["sources"]) >= 5
     assert page == structured
     assert [h["message_id"] for h in page["sources"]] == keys[: len(page["sources"])]
+
+
+async def test_batch_cursor_errors_retain_original_request_index(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    keys = seed(catalog, 2, text="x" * 10000)
+    catalog.store_text(keys[0], "short", [], False)
+    server = build(catalog, object())
+    page = await call(server, "read_mail_batch", {"message_ids": keys})
+    assert page["messages"][0]["next_offset"] is None
+    assert page["messages"][1]["next_offset"] is not None
+    catalog.retire(keys[1])
+    page = await call(server, "read_mail_batch", page["next_call"]["arguments"])
+    assert page["messages"][0]["error"]
+    assert page["messages"][0]["request_index"] == 1
+
+
+async def test_exact_ranks_direct_evidence_before_incidental_long_mail(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    keys = seed(catalog, 2, text="Unrelated newsletter " * 1000 + " flight")
+    catalog.store_text(keys[1], "Flight itinerary: flight AA 3366 departs Chicago.", [], False)
+    server = build(catalog, Ranked(keys))
+    result = await call(server, "search_mail", {"query": "flight", "mode": "exact", "limit": 1})
+    assert result["sources"][0]["message_id"] == keys[1]
+    assert result["match_count"] == 2
+    result = await call(server, "search_mail", result["next_call"]["arguments"])
+    assert result["sources"][0]["message_id"] == keys[0]
+    assert result["has_more"] is False

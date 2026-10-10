@@ -343,9 +343,13 @@ def build(catalog, backend, api_key=None, settings=None):
             )
         if cursor:
             snapshot, _ = read_pages.resume(cursor, None)
-            requests = [ReadRequest(**item) for item in json.loads(snapshot.signature)]
+            saved = json.loads(snapshot.signature)
+            requests = [ReadRequest(**item) for item in saved["requests"]]
+            original_indices = saved["indices"]
         elif message_ids is not None:
             requests = [ReadRequest(message_id=key) for key in message_ids]
+        if not cursor:
+            original_indices = list(range(len(requests)))
         notice = (
             "Follow next_call until null to finish requested messages. Cite citation for facts."
         )
@@ -358,12 +362,12 @@ def build(catalog, backend, api_key=None, settings=None):
                 "notice": max([notice, complete_notice], key=len),
             }
         )
-        values, unfinished = [], []
+        values, unfinished, unfinished_indices = [], [], []
         allowance = (BUDGET - overhead) // len(requests)
         for index, request in enumerate(requests):
             try:
                 value = read_message(request.message_id, request.offset, request.length)
-                value["request_index"] = index
+                value["request_index"] = original_indices[index]
                 text = value["text"]
                 low, high = 0, len(text)
                 while low < high:
@@ -395,12 +399,18 @@ def build(catalog, backend, api_key=None, settings=None):
                             length=request.length,
                         )
                     )
+                    unfinished_indices.append(original_indices[index])
             except ValueError as error:
-                values.append({"request_index": index, "error": str(error)})
+                values.append({"request_index": original_indices[index], "error": str(error)})
         next_call = None
         if unfinished:
             snapshot = read_pages.create(
-                json.dumps([r.model_dump() for r in unfinished]),
+                json.dumps(
+                    {
+                        "requests": [r.model_dump() for r in unfinished],
+                        "indices": unfinished_indices,
+                    }
+                ),
                 [r.message_id for r in unfinished],
                 False,
             )

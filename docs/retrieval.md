@@ -6,7 +6,7 @@ Use `search_mail` to discover messages, then `read_mail` or `read_mail_batch` to
 
 **Hybrid** (default) combines semantic and lexical ranking. It is useful for questions in plain language. It returns a bounded set of candidates, not every matching message. `limit` selects up to 50 candidates (default 10); compact pages may hold fewer. Execute the returned `next_call` to see the rest of that selected set.
 
-**Exact** lists every active, committed message matching the indexed words and filters. It searches subject, sender, and cached extracted body, including supported attachment text. Numeric terms match tokens: `3366` does not match `13366`. It uses [SQLite FTS5 syntax](https://www.sqlite.org/fts5.html#full_text_query_syntax):
+**Exact** lists every active, committed message matching the indexed words and filters. It searches subject, sender, and cached extracted body, including supported attachment text. Matches are ordered by text relevance, with extra weight for the subject and sender; pagination retains every match. Numeric terms match tokens: `3366` does not match `13366`. It uses [SQLite FTS5 syntax](https://www.sqlite.org/fts5.html#full_text_query_syntax):
 
 ```json
 {"query": "\"American Airlines\" OR \"United Airlines\"", "mode": "exact", "limit": 50}
@@ -44,7 +44,7 @@ Or specify offsets and lengths:
 {"requests": [{"message_id": "<first ID>", "length": 2000}, {"message_id": "<second ID>", "offset": 0}]}
 ```
 
-Its `messages` are associated with the input through `request_index`. Each successful item has full metadata, extraction flags and its own continuation offset. When text remains, execute the returned `next_call` with its cursor to read the unfinished messages; finished items are omitted from the next batch. Alternatively, construct `requests` using each `next_offset`. Supply one of `message_ids`, `requests`, or `cursor` per call. The combined response is bounded below 4 KB, so actual pages may be shorter. Cite the returned `citation` for extracted facts. Text is never whitespace-normalized, and offsets continue to refer to the original cached Unicode text. Retry individual errors separately; if metadata exceeds the batch budget, use `read_mail`.
+Its `messages` are associated with the original input through `request_index`, including on cursor continuations. Each successful item has full metadata, extraction flags and its own continuation offset. When text remains, execute the returned `next_call` with its cursor to read the unfinished messages; finished items are omitted from the next batch. Alternatively, construct `requests` using each `next_offset`. Supply one of `message_ids`, `requests`, or `cursor` per call. The combined response is bounded below 4 KB, so actual pages may be shorter. Cite the returned `citation` for extracted facts. Text is never whitespace-normalized, and offsets continue to refer to the original cached Unicode text. Retry individual errors separately; if metadata exceeds the batch budget, use `read_mail`.
 
 ## Existing installations
 
