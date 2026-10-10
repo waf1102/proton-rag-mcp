@@ -23,6 +23,13 @@ try {
   const full = await client.callTool({name: 'read_mail', arguments: {message_id: hit.message_id, offset: live ? 0 : 20000}});
   assert.equal(full.isError, false);
   if (!live) assert.match(JSON.stringify(full), /ABC123/);
+  const batch = await client.callTool({name: 'read_mail_batch', arguments: {requests: [{message_id: hit.message_id, length: 128}, {message_id: 'unknown-fixture'}]}});
+  assert.equal(batch.isError, false);
+  assert.ok(Buffer.byteLength(batch.content[0].text, 'utf8') <= 8192);
+  const messages = JSON.parse(batch.content[0].text).messages;
+  assert.equal(messages[0].message_id, hit.message_id);
+  assert.equal(messages[0].offset, 0);
+  assert.ok(messages[1].error);
   const status = await client.callTool({name: 'index_status', arguments: {}});
   assert.equal(status.isError, false);
   const bad = await client.callTool({name: 'search_mail', arguments: {query: '', limit: 99}});

@@ -290,3 +290,40 @@ async def test_hybrid_filter_applies_to_both_prefetches_before_ranking(tmp_path)
         build(catalog, backend), "search_mail", {"query": "flight", "subject": "Itinerary 1"}
     )
     assert [h["message_id"] for h in result["sources"]] == [keys[1]]
+
+
+async def test_cursor_hides_message_removed_from_requested_folder(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    keys = seed(catalog, 3)
+    catalog.intent("archive-copy", "Archive", "9", "9", "1", False, {})
+    catalog.activate("archive-copy", [])
+    server = build(catalog, Ranked(keys))
+    args = {"query": "3366", "mode": "exact", "folder": "INBOX", "limit": 1}
+    first = await call(server, "search_mail", args)
+    catalog.forget(keys[1])
+    second = await call(server, "search_mail", {**args, "cursor": first["next_cursor"]})
+    assert [h["message_id"] for h in second["sources"]] == [keys[2]]
+    assert second["match_count"] == 3
+    assert second["has_more"] is False
+
+
+async def test_hybrid_retains_ranked_evidence_without_cached_body(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    keys = seed(catalog)
+    with catalog.connect() as db:
+        db.execute("DELETE FROM message_text")
+    result = await call(
+        build(catalog, Ranked(keys, text="Flight AA 3366 to Burlington")),
+        "search_mail",
+        {"query": "3366"},
+    )
+    assert "3366" in result["sources"][0]["text"]
+    assert len(result["sources"][0]["text"]) <= 300
+
+
+def test_snapshot_memory_accounts_for_fallback_previews():
+    from proton_rag.retrieval import Pages
+
+    pages = Pages(max_bytes=10)
+    with pytest.raises(ValueError, match="memory"):
+        pages.create("query", ["key"], False, {"key": "x" * 8})

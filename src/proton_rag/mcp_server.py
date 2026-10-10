@@ -115,6 +115,7 @@ def build(catalog, backend, api_key=None, settings=None):
         if cursor:
             snapshot, offset = pages.resume(cursor, signature)
         else:
+            fallback_previews = {}
             if mode == "exact":
                 keys = lexical.candidates(catalog, query, selected)
             else:
@@ -125,8 +126,10 @@ def build(catalog, backend, api_key=None, settings=None):
                     results = await backend.search(query, limit, **kwargs)
                 except Exception:
                     raise ValueError("Local retrieval unavailable") from None
-                keys = [h["message_id"] for h in hydrate(catalog, results, limit, settings)]
-            snapshot = pages.create(signature, keys, mode == "exact")
+                hits = hydrate(catalog, results, limit, settings)
+                keys = [h["message_id"] for h in hits]
+                fallback_previews = {h["message_id"]: preview(h["text"], query) for h in hits}
+            snapshot = pages.create(signature, keys, mode == "exact", fallback_previews)
             offset = 0
         result = {
             "sources": [],
@@ -150,10 +153,18 @@ def build(catalog, backend, api_key=None, settings=None):
                 snippets = lexical.previews(catalog, selected_keys, query)
                 batch_end = offset + len(selected_keys)
             key = snapshot.keys[offset]
-            if key not in groups or (phases is not None and phases.get(key) != "ready"):
+            if (
+                key not in groups
+                or (folder is not None and not any(r["folder"] == folder for r in groups[key]))
+                or (phases is not None and phases.get(key) != "ready")
+            ):
                 offset += 1
                 continue
-            text = snippets.get(key) or preview(texts.get(key, ""), query)
+            text = (
+                snippets.get(key)
+                or preview(texts.get(key, ""), query)
+                or snapshot.previews.get(key, "")
+            )
             item = compact(format_hit(key, groups[key], text, settings), query)
             trial = {
                 **result,
@@ -176,7 +187,7 @@ def build(catalog, backend, api_key=None, settings=None):
         """Report indexed dates, folder counts, ingestion state and redacted failure reasons.
 
         Check before searching older mail. Indexed dates describe only processed messages;
-        they are not the mailbox's full date range. Search is relevance-ranked, not exhaustive.
+        they are not the mailbox's full date range. Hybrid search is relevance-ranked, not exhaustive.
         Unique messages count content once; folder entries count each membership. The unique
         expected total is unknown until all selected content is indexed. Runtime timestamps
         show the last observation, not a live service heartbeat.

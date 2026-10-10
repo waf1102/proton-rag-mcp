@@ -53,6 +53,7 @@ class Snapshot:
     created: float
     exact: bool
     size: int
+    previews: dict[str, str]
 
 
 class Pages:
@@ -73,9 +74,10 @@ class Pages:
             if self.clock() - s.created >= self.ttl:
                 del self.sessions[identity]
 
-    def create(self, signature, keys, exact):
+    def create(self, signature, keys, exact, previews=None):
         self.expire()
-        size = sum(len(k.encode()) for k in keys)
+        previews = {key: value[:300] for key, value in (previews or {}).items() if key in keys}
+        size = sum(len(k.encode()) for k in keys) + sum(len(v.encode()) for v in previews.values())
         if size > self.max_bytes:
             raise ValueError("Search snapshot exceeds memory limit; narrow the filters")
         while self.sessions and (
@@ -83,7 +85,9 @@ class Pages:
             or sum(s.size for s in self.sessions.values()) + size > self.max_bytes
         ):
             self.sessions.popitem(last=False)
-        snapshot = Snapshot(secrets.token_hex(12), signature, keys, self.clock(), exact, size)
+        snapshot = Snapshot(
+            secrets.token_hex(12), signature, keys, self.clock(), exact, size, previews
+        )
         self.sessions[snapshot.identity] = snapshot
         return snapshot
 
