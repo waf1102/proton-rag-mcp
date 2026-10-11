@@ -28,6 +28,8 @@
 - **See where answers came from** — results include subjects, senders, dates, and source citations.
 - **Pick up where you left off** — incremental indexing resumes after interruptions.
 
+For fast cited findings, start with `grep_mail` using related terms joined with `|`. It returns evidence passages, extraction warnings and coverage in a 16 KB response. Answer from supported passages, disclose coverage limits, and request exhaustive pagination only when needed. See [mail retrieval](docs/retrieval.md).
+
 ## How it works
 
 ```mermaid

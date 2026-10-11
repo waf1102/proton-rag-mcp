@@ -23,6 +23,7 @@ async def test_python_sdk_client():
                 "index_status",
                 "read_mail",
                 "read_mail_batch",
+                "grep_mail",
             ]
             assert tools[0].annotations.readOnlyHint
             result = await client.call_tool("search_mail", {"query": "When does cobalt arrive?"})
@@ -31,6 +32,11 @@ async def test_python_sdk_client():
                 "Tuesday" in result.content[0].text and "imap:///INBOX/" in result.content[0].text
             )
             hit = json.loads(result.content[0].text)["sources"][0]
+            evidence = await client.call_tool("grep_mail", {"pattern": "ABC123"})
+            assert not evidence.isError
+            assert evidence.structuredContent == json.loads(evidence.content[0].text)
+            assert "ABC123" in evidence.content[0].text
+            assert json.loads(evidence.content[0].text)["sources"][0]["citation"] == hit["citation"]
             full = await client.call_tool(
                 "read_mail", {"message_id": hit["message_id"], "offset": 20000}
             )
@@ -143,6 +149,7 @@ async def test_answer_tool_available_with_key_without_ledger():
         "index_status",
         "read_mail",
         "read_mail_batch",
+        "grep_mail",
         "answer_mail",
     }
     assert "private email" in next(t.description for t in tools if t.name == "answer_mail")
