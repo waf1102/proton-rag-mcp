@@ -28,7 +28,7 @@
 - **See where answers came from** — results include subjects, senders, dates, and source citations.
 - **Pick up where you left off** — incremental indexing resumes after interruptions.
 
-For situations described by meaning, use `search_mail` in hybrid mode with `max_bytes=16000`; for identifiers and known phrases, use `grep_mail` with related terms joined by `|`. Check later replies with `related_mail` before describing a promise as unresolved. These tools return cited evidence and coverage limits. See [mail retrieval](docs/retrieval.md).
+For situations described by meaning, use `search_mail` in hybrid mode with `max_bytes=16000`; for identifiers and known phrases, use `grep_mail` with related terms joined by `|`. Include optional `lexical_query` for keyword alternatives in a hybrid call. Check replies and potential confirmations under other subjects with `related_mail(outcome_query=...)` before describing a promise as unresolved. These tools return cited evidence and coverage limits. See [mail retrieval](docs/retrieval.md).
 
 ## How it works
 

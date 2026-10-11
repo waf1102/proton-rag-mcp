@@ -10,7 +10,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 import regex
 
-from .lexical import predicate
+from .lexical import predicate, register_correspondence, CORRESPONDENCE_SCOPE
 from .retrieval import Pages, coverage_summary, serialize, wire_size
 
 
@@ -177,6 +177,7 @@ class Evidence:
         priorities = {}
         try:
             with closing(self.catalog.connect()) as db:
+                register_correspondence(db)
                 db.set_progress_handler(lambda: int(self.clock() >= deadline), 1000)
                 # SQL guards avoid materializing an oversized cached body in Python.
                 oversized = db.execute(
@@ -346,6 +347,8 @@ class Evidence:
             "notice": "Cached-text regex scan complete; only displayed passages support this answer. Header dates are not event dates. Skipped attachments and uncached mail are outside this search.",
         }
         where, args = predicate(self.catalog, selected)
+        if selected.get("correspondence_only"):
+            result["retrieval_scope"] = CORRESPONDENCE_SCOPE
         # Reserve all pagination framing before allocating evidence bytes.
         framing = {
             **result,
@@ -379,6 +382,7 @@ class Evidence:
             )
 
         with closing(self.catalog.connect()) as db:
+            register_correspondence(db)
             while offset < len(units):
                 key = units[offset]["message_id"]
                 end = offset + 1

@@ -10,6 +10,34 @@ from mcp.client.stdio import stdio_client
 FIXTURE = str(Path(__file__).with_name("fixture_server.py"))
 
 
+async def test_sdk_rejects_unknown_arguments_and_nested_read_options():
+    async with stdio_client(StdioServerParameters(command=sys.executable, args=[FIXTURE])) as (
+        r,
+        w,
+    ):
+        async with ClientSession(r, w) as client:
+            await client.initialize()
+            tools = (await client.list_tools()).tools
+            for name, args in [
+                ("search_mail", {"query": "cobalt", "senderr": "person@example.test"}),
+                ("grep_mail", {"pattern": "ABC123", "correspondence_ony": True}),
+                ("index_status", {"sender": "person@example.test"}),
+                ("read_mail", {"message_id": "fixture", "lenght": 20}),
+                ("related_mail", {"message_id": "fixture", "folder": "Sent"}),
+            ]:
+                result = await client.call_tool(name, args)
+                assert result.isError, name
+                assert "Unsupported argument" in result.content[0].text
+            nested = await client.call_tool(
+                "read_mail_batch",
+                {"requests": [{"message_id": "fixture", "lenght": 20}]},
+            )
+            assert nested.isError
+            assert "lenght" in nested.content[0].text
+            assert all(t.inputSchema["additionalProperties"] is False for t in tools)
+            assert not (await client.call_tool("grep_mail", {"pattern": "ABC123"})).isError
+
+
 @pytest.mark.parametrize("result_format", ["both", "text"])
 async def test_sdk_result_formats_preserve_evidence_and_continuations(result_format):
     env = {"RAG_MCP_RESULT_FORMAT": result_format, "FIXTURE_GENERATION": "1"}

@@ -93,6 +93,48 @@ async def test_grep_nonblank_context_merges_windows_and_preserves_original(tmp_p
     assert catalog.get_text(keys[0])["text"] == text
 
 
+async def test_grep_correspondence_scope_and_cursor_recheck(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    keys = seed(catalog, 4, text="I will send your receipt.\n" * 80)
+    with catalog.connect() as db:
+        for key, subject in zip(keys, ["Newsletter", "Re: Refund", "Request", "Fwd: Receipt"]):
+            md = json.loads(
+                db.execute("SELECT metadata FROM messages WHERE key=?", (key,)).fetchone()[0]
+            )
+            md["subject"] = subject
+            db.execute("UPDATE messages SET metadata=? WHERE key=?", (json.dumps(md), key))
+        db.execute("UPDATE documents SET folder='Sent' WHERE message_key=?", (keys[2],))
+    server = build(catalog, object())
+    page = await call(
+        server, "grep_mail", {"pattern": "receipt", "correspondence_only": True, "max_bytes": 4000}
+    )
+    assert page["searched_messages"] == 3
+    assert page["matched_messages"] == 3
+    assert (
+        page["retrieval_scope"] == "Reply/forward subjects or Sent membership; other mail excluded."
+    )
+    assert keys[0] not in {s["message_id"] for s in page["sources"]}
+    assert page["has_more"]
+    with pytest.raises(Exception, match="cursor alone"):
+        await server.call_tool(
+            "grep_mail", {**page["next_call"]["arguments"], "correspondence_only": False}
+        )
+    # A renamed incoming message must cease to qualify even in the saved snapshot.
+    with catalog.connect() as db:
+        md = json.loads(
+            db.execute("SELECT metadata FROM messages WHERE key=?", (keys[3],)).fetchone()[0]
+        )
+        md["subject"] = "Receipt"
+        db.execute("UPDATE messages SET metadata=? WHERE key=?", (json.dumps(md), keys[3]))
+    seen = {s["message_id"] for s in page["sources"]}
+    while page["has_more"]:
+        page = await call(server, "grep_mail", page["next_call"]["arguments"])
+        assert wire_size(page) <= 4000
+        assert keys[3] not in {s["message_id"] for s in page["sources"]}
+        seen.update(s["message_id"] for s in page["sources"])
+    assert keys[2] in seen
+
+
 async def test_grep_cross_year_conflicts_and_extraction_warnings(tmp_path):
     catalog = Catalog(tmp_path / "catalog.db")
     keys = seed(
