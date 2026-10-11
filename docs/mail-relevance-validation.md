@@ -29,6 +29,23 @@ Final client runs are sequential, with a 90-second answer ceiling; empty timeout
 
 Completion time did not improve in every case: final OMP financial recovery used more model time for a fuller answer, and both promise runs were slower than their baselines. These results support improved evidence extraction and targeted verification, not a blanket speed or answer-quality claim.
 
+Cumulative model usage is reported below. AnythingLLM reports prompt tokens without a separate cached-input field; OMP reports uncached and cached input separately. These are client/provider accounting values, not interchangeable pricing or single-context lengths. More verification can increase model input even when server payloads shrink.
+
+| Client / release | Prompt | Reported input | Cached input | Generated output |
+| --- | --- | ---: | ---: | ---: |
+| anything / baseline | trip | 60,551 | not reported | 1,078 |
+| anything / candidate | trip | 26,633 | not reported | 777 |
+| anything / baseline | promises | 63,119 | not reported | 917 |
+| anything / candidate | promises | 125,591 | not reported | 1,516 |
+| anything / baseline | financial | 831,320 | not reported | 1,620 |
+| anything / candidate | financial | 65,863 | not reported | 1,028 |
+| omp / baseline | trip | 21,184 | 48,768 | 412 |
+| omp / candidate | trip | 14,801 | 44,800 | 501 |
+| omp / baseline | promises | 26,713 | 68,864 | 682 |
+| omp / candidate | promises | 16,160 | 67,072 | 853 |
+| omp / baseline | financial | 22,144 | 87,296 | 848 |
+| omp / candidate | financial | 28,199 | 116,864 | 962 |
+
 ## Evidence quality
 
 Both final candidates recovered the known postponed-processing trip conversation with correct citations and no invented replacement date. Both baseline trip runs missed it; the baseline OMP answer also omitted citation links. Final OMP promises checked two candidates with mailbox-wide outcome queries, excluded one with an explicit refund confirmation, and qualified the remaining conditional promise as unknown rather than never completed. Final OMP financial recovered the reported extra-payment dispute and the later bank refund under another sender/subject, distinguished financial burden from an assessed penalty, and attributed causality to the sender's account. The baseline financial OMP run returned an accurate but inconclusive registration example and missed that known reimbursement case.
