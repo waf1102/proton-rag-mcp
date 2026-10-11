@@ -123,3 +123,45 @@ def test_real_restore_retains_unfinished_ingestion(tmp_path, phase):
     finally:
         backend.client.delete(url + "/collections/" + collection)
         backend.request("DELETE", "", operation="fixture_cleanup")
+
+
+async def test_balanced_search_promotes_agreement_without_displacing_sharp_heads(tmp_path):
+    """Two channels agree on an invoice that peaky RRF ranks below single-channel hits."""
+    import math
+
+    url = os.environ.get("QDRANT_TEST_URL")
+    if not url:
+        pytest.skip("Set QDRANT_TEST_URL to an isolated Qdrant server")
+
+    class RankedEmbedder(Embedder):
+        def embed_documents(self, texts):
+            vectors = []
+            for text in texts:
+                rank = int(text.split()[0])
+                cosine = 1 - rank / 1000
+                vectors.append([cosine, math.sqrt(1 - cosine**2)] + [0.0] * 766)
+            return vectors
+
+    settings = Settings(state_dir=tmp_path, qdrant_url=url, workspace="fixture-" + uuid.uuid4().hex)
+    catalog = Catalog(tmp_path / "catalog.db")
+    model = RankedEmbedder()
+    state = IndexState(catalog, settings.workspace, model.profile)
+    backend = QdrantIndex(settings, catalog, state, model)
+    backend.bootstrap()
+    keys = ["proton-mail-" + f"{i:064x}" for i in range(1, 26)]
+    try:
+        for i, key in enumerate(keys, 1):
+            # Opposite lexical/dense orders, except the gold message is eighth in both.
+            frequency = {8: 18, 18: 8}.get(i, i)
+            text = str(i) + " " + "invoice " * frequency + "note " * (50 - frequency)
+            catalog.intent(key, "fixtures", "1", str(i), key, True, {})
+            catalog.store_text(key, text, [], False)
+            backend.ensure(key, text)
+            catalog.activate(key, [key])
+        hits = await backend.search("invoice", 10)
+        ids = [h["metadata"]["docSource"] for h in hits]
+        assert set(ids[:2]) == {keys[0], keys[24]}
+        assert ids[2] == keys[7]
+        assert len(ids) == len(set(ids)) == 10
+    finally:
+        backend.request("DELETE", "", operation="fixture_cleanup")

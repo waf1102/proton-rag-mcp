@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+from copy import deepcopy
 from dataclasses import dataclass
 import json
 import re
@@ -13,6 +14,7 @@ from .embeddings import ContextExceeded, validate_vector
 from .index import KEY, IndexFailure, local_url
 from .index_state import text_hash
 from .health import require_space
+from .ranking import fuse_rankings
 
 
 @dataclass(frozen=True)
@@ -320,31 +322,46 @@ class QdrantIndex:
             data["filter"] = selected
             for item in data["prefetch"]:
                 item["filter"] = selected
-        result = await asyncio.to_thread(
-            self.request, "POST", "/points/query/groups", data, operation="search"
+        queries = [data]
+        if self.settings.search_ranking == "ensemble":
+            consensus = deepcopy(data)
+            consensus["query"] = {"rrf": {"k": 20}}
+            for item in consensus["prefetch"]:
+                item["limit"] = 500
+            queries.append(consensus)
+        results = await asyncio.gather(
+            *(
+                asyncio.to_thread(
+                    self.request, "POST", "/points/query/groups", query_data, operation="search"
+                )
+                for query_data in queries
+            )
         )
-        keys = [group["id"] for group in result["groups"]]
+        keys = list(dict.fromkeys(group["id"] for r in results for group in r["groups"]))
         active = self.catalog.active_keys(keys)
         if message_ids is not None:
             active.intersection_update(message_ids)
         manifests = self.state.entries(keys)
-        hits = []
-        for group in result["groups"]:
-            key = group["id"]
-            entry = manifests.get(key)
-            if key not in active or not entry or entry["phase"] != "ready":
-                continue
-            ids = {p["id"]: p for p in entry["points"]}
-            for point in group["hits"]:
-                payload = point["payload"]
-                wanted = ids.get(str(point["id"]))
-                if (
-                    wanted
-                    and wanted["checksum"] == payload.get("checksum")
-                    and payload.get("profile") == self.state.profile.identity
-                ):
-                    hits.append({"text": payload["text"], "metadata": {"docSource": key}})
-                    break
-            if len(hits) >= limit:
-                break
-        return hits
+        rankings = []
+        for result in results:
+            hits = []
+            for group in result["groups"]:
+                key = group["id"]
+                entry = manifests.get(key)
+                if key not in active or not entry or entry["phase"] != "ready":
+                    continue
+                ids = {p["id"]: p for p in entry["points"]}
+                for point in group["hits"]:
+                    payload = point["payload"]
+                    wanted = ids.get(str(point["id"]))
+                    if (
+                        wanted
+                        and wanted["checksum"] == payload.get("checksum")
+                        and payload.get("profile") == self.state.profile.identity
+                    ):
+                        hits.append({"text": payload["text"], "metadata": {"docSource": key}})
+                        break
+            rankings.append(hits)
+        if len(rankings) == 1:
+            return rankings[0][:limit]
+        return fuse_rankings(*rankings, limit)
