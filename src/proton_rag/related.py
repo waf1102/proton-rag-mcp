@@ -209,7 +209,7 @@ class RelatedMail:
                 "arguments": {"cursor": self.pages.token(snapshot, offset)},
             },
             "exhaustive": False,
-            "notice": "Related candidates share normalized subjects and at least two participant addresses; newest first. Renamed subjects/other addresses may be missed. Body excerpts can include quoted history; do not treat quoted promises as new commitments. Clipped bodies need read_mail before claiming no confirmation in a message. No matches do not prove a promise was never completed. Follow next_call to check remaining candidates before claiming no confirmation was found in this set.",
+            "notice": "Related candidates share normalized subjects and at least two participant addresses; newest first. Renamed subjects/other addresses may be missed. Body excerpts can include quoted history; do not treat quoted promises as new commitments. Clipped bodies do not establish absence in a whole message. No matches do not prove noncompletion. Cite supported facts and disclose examined scope. Follow next_call only for exhaustive investigation or a specific missing fact; do not claim absence in unread candidates.",
         }
         with closing(self.catalog.connect()) as db:
             if not self._active(db, seed_key):

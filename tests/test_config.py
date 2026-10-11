@@ -49,3 +49,15 @@ def test_search_ranking_can_be_selected_without_changing_index_profile(ranking):
 def test_unknown_search_ranking_is_rejected():
     with pytest.raises(ValueError, match="RAG_SEARCH_RANKING"):
         Settings.from_env({"RAG_SEARCH_RANKING": "typo"})
+
+
+@pytest.mark.parametrize("result_format", ["both", "text"])
+def test_mcp_result_format_is_selectable_without_changing_retrieval(result_format):
+    settings = Settings.from_env({"RAG_MCP_RESULT_FORMAT": result_format})
+    assert settings.mcp_result_format == result_format
+    assert settings.search_ranking == Settings().search_ranking
+
+
+def test_unknown_mcp_result_format_is_rejected():
+    with pytest.raises(ValueError, match="RAG_MCP_RESULT_FORMAT"):
+        Settings.from_env({"RAG_MCP_RESULT_FORMAT": "typo"})

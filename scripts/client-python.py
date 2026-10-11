@@ -21,6 +21,7 @@ async def run():
             "QDRANT_API_KEY",
             "QDRANT_COLLECTION",
             "OLLAMA_URL",
+            "RAG_MCP_RESULT_FORMAT",
         )
     }
     async with stdio_client(
@@ -42,7 +43,11 @@ async def run():
                 {"query": os.environ.get("RAG_INTEROP_QUERY", "When does cobalt arrive?")},
             )
             assert not result.isError
-            assert result.structuredContent == json.loads(result.content[0].text)
+            assert result.structuredContent == (
+                None
+                if env.get("RAG_MCP_RESULT_FORMAT") == "text"
+                else json.loads(result.content[0].text)
+            )
             if not os.environ.get("RAG_INTEROP_QUERY"):
                 assert "Tuesday" in result.content[0].text
             assert "imap:///" in result.content[0].text
@@ -65,7 +70,11 @@ async def run():
                 },
             )
             assert not evidence.isError
-            assert evidence.structuredContent == json.loads(evidence.content[0].text)
+            assert evidence.structuredContent == (
+                None
+                if env.get("RAG_MCP_RESULT_FORMAT") == "text"
+                else json.loads(evidence.content[0].text)
+            )
             assert len(evidence.content[0].text.encode()) <= 4000
             assert json.loads(evidence.content[0].text)["sources"][0]["citation"] == hit["citation"]
             batch = await client.call_tool(

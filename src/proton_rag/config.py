@@ -34,6 +34,7 @@ class Settings:
     search_default: int = 10
     search_max: int = 50
     search_ranking: str = "ensemble"
+    mcp_result_format: str = "both"
     excerpt_chars: int = 4000
     answer_sources: int = 5
     max_output: int = 1024
@@ -90,6 +91,8 @@ class Settings:
             raise ValueError("Default retrieval limits must not exceed RAG_SEARCH_MAX")
         if result.search_ranking not in {"legacy", "ensemble"}:
             raise ValueError("RAG_SEARCH_RANKING must be legacy or ensemble")
+        if result.mcp_result_format not in {"both", "text"}:
+            raise ValueError("RAG_MCP_RESULT_FORMAT must be both or text")
         if result.imap_port > 65535:
             raise ValueError("Invalid IMAP port")
         if result.warn_free_bytes < result.min_free_bytes:

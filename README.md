@@ -153,6 +153,18 @@ Use your exact Bridge folder names. If both settings are present, exclusions tak
 
 The client launches the MCP server automatically. **Keep the indexer running separately** to pick up new mail.
 
+Some clients forward only tool descriptions, omitting the MCP server's initialization instructions. The tools include the essential search, citation, verification, and stopping guidance themselves. For ordinary questions, they recommend a bounded answer with disclosed coverage; exhaustive requests still require paging through all results.
+
+By default, each retrieval response includes both MCP text content and structured content for compatibility. Clients that serialize the entire result into model context (including AnythingLLM) can set `RAG_MCP_RESULT_FORMAT=text` in **this server's** `env` configuration to send one copy of the evidence. Citation values, coverage, errors, and continuation arguments remain in the JSON text. Keep the default `both` for clients that use structured content directly. Restart or reconnect the MCP client after changing its environment or updating the server; existing stdio processes keep their loaded code and tool descriptions.
+
+```json
+"env": {
+  "RAG_MCP_RESULT_FORMAT": "text"
+}
+```
+
+Merge this key with the server's existing environment settings. No reindexing is needed.
+
 Choose a client below. Replace `/home/YOUR_USER/proton-rag-mcp` with your checkout's absolute path and use the same API key, state directory, and collection as above. Run `pwd` from the repository root to find your checkout path. Do not use `~` in JSON paths.
 
 <details>

@@ -2,11 +2,54 @@ import asyncio
 import os
 import json
 import sys
+import pytest
 from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 FIXTURE = str(Path(__file__).with_name("fixture_server.py"))
+
+
+@pytest.mark.parametrize("result_format", ["both", "text"])
+async def test_sdk_result_formats_preserve_evidence_and_continuations(result_format):
+    env = {"RAG_MCP_RESULT_FORMAT": result_format, "FIXTURE_GENERATION": "1"}
+    async with stdio_client(
+        StdioServerParameters(command=sys.executable, args=[FIXTURE], env=env)
+    ) as (r, w):
+        async with ClientSession(r, w) as client:
+            await client.initialize()
+            # A client that serializes the whole result must see the evidence once
+            # in text mode; clients requiring structured results retain the default.
+            full = await client.call_tool("read_mail", {"message_id": "fixture", "length": 50000})
+            assert not full.isError
+            assert full.model_dump_json().count("Confirmation: ABC123") == (
+                1 if result_format == "text" else 2
+            )
+            for name, args in [
+                ("search_mail", {"query": "When does cobalt arrive?", "max_bytes": 16000}),
+                ("grep_mail", {"pattern": "ABC123"}),
+                ("related_mail", {"message_id": "fixture"}),
+                ("index_status", {}),
+                ("answer_mail", {"query": "When does cobalt arrive?"}),
+                ("read_mail_batch", {"message_ids": ["fixture"]}),
+            ]:
+                result = await client.call_tool(name, args)
+                assert not result.isError
+                page = json.loads(result.content[0].text)
+                assert result.structuredContent == (
+                    page if result_format == "both" and name != "answer_mail" else None
+                )
+                if name == "read_mail_batch":
+                    assert page["next_call"]
+                    following = await client.call_tool(
+                        page["next_call"]["tool"], page["next_call"]["arguments"]
+                    )
+                    assert not following.isError
+                    assert (
+                        json.loads(following.content[0].text)["messages"][0]["offset"]
+                        == (page["messages"][0]["next_offset"])
+                    )
+            assert (await client.call_tool("read_mail", {"message_id": "absent"})).isError
 
 
 async def test_python_sdk_client():
