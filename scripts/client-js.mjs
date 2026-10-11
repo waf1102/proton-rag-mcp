@@ -3,11 +3,16 @@ import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
 const client = new Client({name: 'proton-js-interop', version: '1.0.0'});
 const live = process.env.RAG_INTEROP_LIVE === '1';
+const textOnly = process.env.RAG_MCP_RESULT_FORMAT === 'text';
+function checkStructured(result) {
+  if (textOnly) assert.equal(result.structuredContent, undefined);
+  else assert.deepEqual(result.structuredContent, JSON.parse(result.content[0].text));
+}
 const transport = new StdioClientTransport({
   command: '.venv/bin/python',
   args: live ? ['-m', 'proton_rag.mcp_server'] : ['tests/fixture_server.py'],
   env: Object.fromEntries(Object.entries(process.env).filter(([k]) =>
-    ['PATH', 'RAG_STATE_DIR', 'QDRANT_URL', 'QDRANT_API_KEY', 'QDRANT_COLLECTION', 'OLLAMA_URL'].includes(k))),
+    ['PATH', 'RAG_STATE_DIR', 'QDRANT_URL', 'QDRANT_API_KEY', 'QDRANT_COLLECTION', 'OLLAMA_URL', 'RAG_MCP_RESULT_FORMAT'].includes(k))),
   stderr: 'pipe',
 });
 try {
@@ -17,7 +22,7 @@ try {
   assert.equal(tools[0].annotations.readOnlyHint, true);
   const result = await client.callTool({name: 'search_mail', arguments: {query: process.env.RAG_INTEROP_QUERY || 'When does cobalt arrive?'}});
   assert.equal(result.isError, false);
-  assert.deepEqual(result.structuredContent, JSON.parse(result.content[0].text));
+  checkStructured(result);
   if (!process.env.RAG_INTEROP_QUERY) assert.match(JSON.stringify(result), /Tuesday/);
   assert.match(JSON.stringify(result), /imap:\/\/\//);
   const hit = JSON.parse(result.content[0].text).sources[0];
@@ -25,7 +30,7 @@ try {
     const related = await client.callTool({name: 'related_mail', arguments: {message_id: hit.message_id}});
     assert.equal(related.isError, false);
     const relatedPage = JSON.parse(related.content[0].text);
-    assert.deepEqual(related.structuredContent, relatedPage);
+    checkStructured(related);
     assert.equal(relatedPage.sources[0].citation, hit.citation);
     assert.equal(relatedPage.sources[0].display_truncated, true);
     assert.equal(relatedPage.exhaustive, false);
@@ -41,7 +46,7 @@ try {
   const evidencePattern = live ? originalText.slice(0, 32).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : 'ABC123';
   const evidence = await client.callTool({name: 'grep_mail', arguments: {pattern: evidencePattern, message_ids: [hit.message_id], max_bytes: 4000}});
   assert.equal(evidence.isError, false);
-  assert.deepEqual(evidence.structuredContent, JSON.parse(evidence.content[0].text));
+  checkStructured(evidence);
   assert.ok(Buffer.byteLength(evidence.content[0].text, 'utf8') <= 4000);
   assert.equal(JSON.parse(evidence.content[0].text).sources[0].citation, hit.citation);
   if (!live) assert.match(evidence.content[0].text, /ABC123/);

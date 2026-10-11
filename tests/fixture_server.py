@@ -6,6 +6,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from proton_rag.sync import Catalog
 from proton_rag.mcp_server import build
+from proton_rag.config import Settings
+from proton_rag import mcp_server
 
 
 class Backend:
@@ -18,6 +20,10 @@ class Backend:
                     Path(os.environ["CANCEL_MARKER"]).write_text("cancelled")
                 raise
         return [{"text": "Cobalt arrives Tuesday.", "metadata": {"docSource": "fixture"}}]
+
+
+async def generated_fixture(query, hits, api_key, settings):
+    return {"answer": "Cobalt arrives Tuesday.", "sources": hits}
 
 
 with TemporaryDirectory() as state:
@@ -42,4 +48,11 @@ with TemporaryDirectory() as state:
         [],
         False,
     )
-    build(catalog, Backend()).run(transport="stdio")
+    if os.environ.get("FIXTURE_GENERATION"):
+        mcp_server.answer = generated_fixture
+    build(
+        catalog,
+        Backend(),
+        api_key="fixture" if os.environ.get("FIXTURE_GENERATION") else None,
+        settings=Settings.from_env(),
+    ).run(transport="stdio")
