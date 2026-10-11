@@ -91,10 +91,9 @@ def build(catalog, backend, api_key=None, settings=None):
             "when requested. Keep the answer brief: requested facts, citations and one coverage "
             "caveat. A ticket or boarding pass is evidence of scheduled travel, not proof it occurred. "
             "Read the grep_mail schema first, then make one pattern combining "
-            "related terms with the relevant filters and default byte budget. For fast calendar year Y, "
-            "start with header dates from December 1 of Y-1 to January 1 of Y+1; disclose this bound "
-            "and widen for specific gaps or conflicts. Exhaustive event-year searches need broader "
-            "or unbounded header dates to find earlier bookings and later notices. "
+            "related terms with the relevant filters and default byte budget. Header-date filters "
+            "can exclude earlier bookings and later notices; disclose bounds and broaden them "
+            "for exhaustive event-year coverage. "
             "grep_mail includes coverage; index_status is unnecessary before it. "
             "Answer when passages support the facts; call again only for a specific "
             "missing fact or conflict. Reuse examined message_ids; avoid overlapping searches. "
@@ -495,11 +494,9 @@ def build(catalog, backend, api_key=None, settings=None):
     ) -> CallToolResult:
         """Start here for a fast cited answer: combine related terms in one regex with |.
 
-        Include relevant filters in the first call. For fast calendar year Y, start with sent_after
-        December 1 of Y-1 and sent_before January 1 of Y+1, not the entire preceding year.
-        Disclose these bounds; widen for specific gaps/conflicts. For exhaustive event-year
-        coverage, use broader/unbounded header dates to find earlier bookings and later notices.
-        Start with the default byte budget.
+        Include relevant filters in the first call and start with the default byte budget.
+        Disclose header-date bounds; broaden them for exhaustive event-year coverage so earlier
+        bookings and later notices remain eligible.
         Coverage is included, so no preliminary index_status call or other search schema is needed.
         Search active committed cached text locally, case-insensitive with multiline anchors.
         Returns matching passages and surrounding nonblank lines (context default 2), compact

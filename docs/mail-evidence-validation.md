@@ -1,6 +1,6 @@
 # Mail evidence candidate validation
 
-Status: implemented on `codex/mail-evidence`; live acceptance has failed the timing and call gates. The candidate has not been merged or deployed. No end-to-end Gemini speedup is established.
+Status: approved for an incremental merge of the verified backend improvements. The experimental calendar-window guidance has been removed from the server and retrieval instructions. The timing and call goals remain unmet; no end-to-end Gemini speedup is established. The historical benchmarks below used the earlier calendar-window guidance, so they do not establish performance for the revised instructions.
 
 ## Implemented behavior
 
@@ -74,10 +74,10 @@ The exact original ordinary prompts are `in my email find flights from 2016`, `g
 
 The exact 2017 answer supports both known numbers, with valid citation identifiers and accurate booking/coverage caveats. The exact 2018 answer mentions four of the existing 18 known numbers plus one additional supported standby listing. Its coverage caveat correctly reports five displayed messages out of 79 matches, but Gemini prepends `file:///` to the returned `imap:///` citation links. Two event dates are absent from the viewed passages; their original messages confirm 2018. These limitations are retained in the manual audit. Neither completed ordinary answer meets the 60-second ceiling, and the others fail to deliver an answer.
 
-Earlier tuning trials remain retained separately from this fixed comparison, including a valid 2017 empty timeout at 90 seconds/11 calls, a wider-lookback 2017 completion at approximately 79.5 seconds/13 calls, and failed 2016/2018 trials. A 2016 partial pilot incorrectly called a reservation confirmed travel; the final instruction explicitly addresses this. The excluded wrapper setup failure occurred before valid tool execution. No further fast-search settings changed during the final comparison; the exhaustive-search clarification preserves its fast-search window.
+Earlier tuning trials remain retained separately from this fixed comparison, including a valid 2017 empty timeout at 90 seconds/11 calls, a wider-lookback 2017 completion at approximately 79.5 seconds/13 calls, and failed 2016/2018 trials. A 2016 partial pilot incorrectly called a reservation confirmed travel; the final instruction explicitly addresses this. The excluded wrapper setup failure occurred before valid tool execution. No further fast-search settings changed during the final comparison; the exhaustive-search clarification preserved the historical fast-search window during those trials.
 
 All 24 final sessions and private payload/manual audit records are retained for review. Final fresh verification passes 168 tests with no skips, both real-mailbox SDKs, lint/format and whitespace checks. Both the frozen source catalog and candidate runtime still hash-match all 22,353 original-text baseline files. The temporary Gemini server/schema cache and isolated Qdrant test container have been removed; the deployed release remains unchanged and its service is active.
 
 Require median answer completion ≤30 seconds, no completed run >60 seconds, and ≤8 total calls per prompt, plus a demonstrated win against equivalent direct search. Empty timeout answers fail. The historical 180-second/31-call direct-search trial is censored and cannot serve as a successful baseline.
 
-The completed comparison samples fail the timing criteria, so merge and deployment are withheld under the plan's acceptance gate. The existing rollout authorization remains valid if those gates are later satisfied. No mailbox migration, reindexing or new cloud generation service is required.
+The completed comparison samples fail the timing criteria. The user subsequently approved merging the verified backend improvements while leaving the experimental calendar-window rule out and keeping the end-to-end speed target open. This incremental merge does not establish the original performance acceptance. No mailbox migration, reindexing or new cloud generation service is required.
