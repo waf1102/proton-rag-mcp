@@ -1,6 +1,6 @@
 # Finding and reading your mail
 
-Start with `grep_mail` for a fast cited answer. Combine related terms in one regex, use the returned coverage, and answer when its passages support the requested facts. Make another call only for a specific missing fact or conflict, reusing examined message IDs. Reserve exhaustive enumeration for explicit requests and otherwise disclose the limits of the displayed evidence.
+For questions about situations or meaning, start with `search_mail` in hybrid mode, a short natural-language description and `max_bytes=16000`. You can include two different short paraphrases in `alternate_queries`; these run together with the same filters and interleave unique results within `limit`. This is bounded candidate discovery, not exhaustive coverage. For identifiers or known phrases, use `grep_mail` with related terms combined in one regex. Check later replies with `related_mail` before calling a promise unresolved. Answer when the evidence supports the requested facts; continue only for a specific missing fact or contradiction. Reserve exhaustive enumeration for explicit requests and disclose the limits of the examined messages.
 
 Header-date filters restrict when an email was sent. Disclose any bounds and allow for earlier bookings and later notices when searching for events in a particular year. Exhaustive event-year coverage may require unbounded header dates. A ticket or boarding pass supports scheduled travel; it does not prove the trip occurred.
 
@@ -44,7 +44,21 @@ An empty exact query with filters browses the matching messages. Header dates ar
 
 Responses include `sources`, a small coverage summary, `exhaustive`, `has_more`, `remaining_count`, and a ready-to-use `next_call`. The existing `next_cursor` field remains available. `match_count` appears only in exact mode. When `has_more` is true, the page is incomplete. Execute `next_call.tool` with `next_call.arguments` until it is false. A continuation needs only `{"cursor":"<returned cursor>"}`; the server retains the original query, mode, limit and filters. Repeating those arguments also works, but changing them produces an explicit error. Cursors expire after ten minutes, a server restart, or eviction from the bounded cache; on an explicit cursor error, start the query again. Deletions between pages are hidden; the original match count may then exceed the number returned. Newly arriving messages require a new search.
 
-Every search page fits under 4 KB of compact UTF-8 JSON result text. The same data is also provided as MCP structured content. This stays below Gemini’s observed inline-output threshold; larger selections continue on subsequent pages. Sources include stable `message_id`, citation, subject/sender/date, folder names and a preview up to 300 characters. Full metadata is available from `read_mail`. An unusually large folder/citation payload produces an explicit budget error instead of silently dropping the message.
+By default, each search page fits under 4 KB of compact UTF-8 JSON result text. `max_bytes` optionally accepts 3,900–32,000 bytes; use 16,000 for semantic evidence. Larger responses preserve up to 1,600 compacted characters of the actual retrieved chunk, including extraction warnings and clipping flags. They can require one generated-output file read. Hybrid matching passages are retained instead of being replaced by a keyword window in the full message. The response budget is included in the saved cursor. The same data is also provided as MCP structured content. The default stays below Gemini’s observed inline-output threshold; larger selections continue on subsequent pages. Sources include stable `message_id`, citation, subject/sender/date and folder names. Legacy default previews remain up to 300 characters. Full metadata is available from `read_mail`. An unusually large folder/citation payload produces an explicit budget error instead of silently dropping the message.
+
+## Check related replies
+
+`related_mail` accepts a found `message_id` or citation. It returns newest messages first, matching normalized subjects (removing Re/Fw/Fwd prefixes) and at least two shared participant addresses. Optional `subject` broadens the match to a substring for renamed exchanges. This is candidate discovery, not an RFC-thread identity or exhaustive coverage across alternate subjects/addresses.
+
+```json
+{"message_id": "<found ID>", "subject": "Receipt correction"}
+```
+
+The default response budget is 16,000 bytes, configurable from 4,000–32,000. Responses preserve body excerpts, including quoted history, mark clipping and skipped attachments, and retain citations. They do not classify quoted text as new statements. Read the original when exact formatting or a clipped body matters. Candidate scans are limited to five seconds and 1,000 messages, with bounded snapshot memory; limits return actionable errors instead of claiming completeness. Continuations take the returned cursor alone and recheck active/committed status.
+
+Follow every candidate page before saying no confirmation was found **in this set**. Even then, do not conclude confirmation was never sent or work was never completed. A later reply may resolve an old promise quoted below it. Attribute disputed amounts to the email; distinguish an out-of-pocket payment from an assessed fee and a payoff amount from principal.
+
+For exchanges between people obscured by automated mail, `search_mail(correspondence_only=true)` restricts candidates before ranking to reply/forward subjects or Sent membership. The response discloses this scope because it can miss direct incoming messages. It combines with existing filters and is retained in cursor continuations. Candidate IDs have a 64 MiB limit and a five-second scan deadline; exceeding either requires narrower filters.
 
 ## Read full text
 

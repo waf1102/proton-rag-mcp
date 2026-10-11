@@ -28,7 +28,7 @@
 - **See where answers came from** — results include subjects, senders, dates, and source citations.
 - **Pick up where you left off** — incremental indexing resumes after interruptions.
 
-For fast cited findings, start with `grep_mail` using related terms joined with `|`. It returns evidence passages, extraction warnings and coverage in a 16 KB response. Answer from supported passages, disclose coverage limits, and request exhaustive pagination only when needed. See [mail retrieval](docs/retrieval.md).
+For situations described by meaning, use `search_mail` in hybrid mode with `max_bytes=16000`; for identifiers and known phrases, use `grep_mail` with related terms joined by `|`. Check later replies with `related_mail` before describing a promise as unresolved. These tools return cited evidence and coverage limits. See [mail retrieval](docs/retrieval.md).
 
 ## How it works
 
