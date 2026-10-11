@@ -53,6 +53,47 @@ async def test_related_finds_reply_and_preserves_quoted_context(tmp_path):
     assert result["exhaustive"] is False
 
 
+async def test_related_outcome_query_finds_other_sender_and_subject_without_assuming_completion(
+    tmp_path,
+):
+    catalog = Catalog(tmp_path / "catalog.db")
+    seed = message(catalog, 1, "Re: Receipt correction", "I will refund $47.52.")
+    pending = message(catalog, 2, "Re: Receipt correction", "I am still working on the refund.")
+    receipt = message(
+        catalog,
+        3,
+        "Deposit notification",
+        "Shop sent you $47.52. Memo: refund.",
+        sender="bank@bank.example",
+        recipient="me@example.test",
+    )
+    message(
+        catalog,
+        4,
+        "Deposit notification",
+        "Different amount $48.52 refund.",
+        sender="bank@bank.example",
+    )
+    server = build(catalog, object())
+    result = await call(
+        server, "related_mail", {"message_id": seed, "outcome_query": '"47.52"', "max_bytes": 4000}
+    )
+    assert result["outcome_query"] == '"47.52"'
+    found = []
+    while True:
+        assert wire_size(result) <= 4000
+        found.extend(result["sources"])
+        if not result["has_more"]:
+            break
+        result = await call(server, "related_mail", result["next_call"]["arguments"])
+    assert {s["message_id"] for s in found} == {seed, pending, receipt}
+    deposit = next(s for s in found if s["message_id"] == receipt)
+    assert deposit["relation"] == "outcome_query"
+    assert "Shop sent you $47.52" in deposit["text"]
+    assert "candidate" in result["notice"].lower()
+    assert result["exhaustive"] is False
+
+
 async def test_related_subject_override_includes_renamed_exchange(tmp_path):
     catalog = Catalog(tmp_path / "catalog.db")
     seed = message(catalog, 1, "Service Record Community Hours", "I will update the hours")
@@ -167,3 +208,120 @@ def test_related_expiry_and_retired_seed(tmp_path):
     catalog.retire(keys[0])
     with pytest.raises(ValueError, match="Seed message is unavailable"):
         reader.query(**result["next_call"]["arguments"])
+
+
+async def test_outcome_pages_recheck_commit_and_deletion_and_bind_query(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    seed = message(catalog, 1, "Re: Technical change", "I will update reference xyz-42.")
+    receipts = [
+        message(
+            catalog,
+            i,
+            "Build notification",
+            "日本語 🦊 " * 300 + " xyz-42 completed.",
+            sender="ci@example.test",
+        )
+        for i in range(2, 8)
+    ]
+    with catalog.connect() as db:
+        db.execute("CREATE TABLE index_messages (key TEXT PRIMARY KEY, phase TEXT)")
+        db.executemany(
+            "INSERT INTO index_messages VALUES (?,?)", [(k, "ready") for k in [seed, *receipts]]
+        )
+        db.execute("UPDATE index_messages SET phase='uploading' WHERE key=?", (receipts[-1],))
+    server = build(catalog, object())
+    result = await call(
+        server, "related_mail", {"message_id": seed, "outcome_query": '"xyz-42"', "max_bytes": 4000}
+    )
+    assert result["has_more"]
+    found = [s["message_id"] for s in result["sources"]]
+    unseen = next(k for k in receipts[:-1] if k not in found)
+    catalog.retire(unseen)
+    with pytest.raises(Exception, match="cursor alone"):
+        await server.call_tool(
+            "related_mail", {**result["next_call"]["arguments"], "outcome_query": "other"}
+        )
+    while result["has_more"]:
+        result = await call(server, "related_mail", result["next_call"]["arguments"])
+        assert wire_size(result) <= 4000
+        assert result["outcome_query"] == '"xyz-42"'
+        found.extend(s["message_id"] for s in result["sources"])
+    assert len(found) == len(set(found))
+    assert set(found) == {seed, *receipts[:-1]} - {unseen}
+
+
+def test_ranked_keyword_candidates_are_bounded_and_reject_invalid_queries(tmp_path):
+    from proton_rag.lexical import ranked_hits
+
+    catalog = Catalog(tmp_path / "catalog.db")
+    for i in range(1, 15):
+        message(catalog, i, "Build notification", "日本語 🦊 " * 2000 + " xyz-42 completed.")
+    hits = ranked_hits(catalog, '"xyz-42"', {}, 10)
+    assert len(hits) == 10
+    assert all(len(h["text"]) <= 1600 and "completed" in h["text"] for h in hits)
+    with pytest.raises(ValueError, match="time limit"):
+        ranked_hits(catalog, "completed", {}, 10, scan_seconds=0)
+    for query in ["", '"unfinished', "*"]:
+        with pytest.raises(ValueError, match="exact query"):
+            ranked_hits(catalog, query, {}, 10)
+
+
+async def test_outcome_keeps_deep_match_and_authored_prefix_in_same_thread(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    seed = message(catalog, 1, "Re: Technical change", "I will fix reference REF12345.")
+    reply = message(
+        catalog,
+        2,
+        "Re: Technical change",
+        "Here is the completion log.\n" + "layout " * 1000 + "\nPayment received REF12345.",
+    )
+    result = await call(
+        build(catalog, object()), "related_mail", {"message_id": seed, "outcome_query": "REF12345"}
+    )
+    text = next(s["text"] for s in result["sources"] if s["message_id"] == reply)
+    assert "Here is the completion log." in text
+    assert "Payment received REF12345." in text
+
+
+async def test_outcome_long_unicode_query_fits_minimum_budget(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    seed = message(catalog, 1, "Re: Technical change", "I will update the record.")
+    query = " OR ".join('"' + "未" * 80 + str(i) + '"' for i in range(40))
+    result = await call(
+        build(catalog, object()),
+        "related_mail",
+        {"message_id": seed, "outcome_query": query, "max_bytes": 4000},
+    )
+    assert wire_size(result) <= 4000
+    assert result["sources"][0]["message_id"] == seed
+    assert result["outcome_query_truncated"] is True
+
+
+async def test_outcome_slots_add_evidence_beyond_already_included_thread(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    keys = [
+        message(catalog, i, "Re: Receipt correction", "REF12345 refund received.")
+        for i in range(1, 15)
+    ]
+    bank = message(
+        catalog,
+        15,
+        "Bank notification",
+        "Incidental terms " * 1000 + "REF12345 refund received.",
+        sender="bank@example.test",
+    )
+    server = build(catalog, object())
+    result = await call(
+        server,
+        "related_mail",
+        {"message_id": keys[0], "outcome_query": "REF12345 AND refund", "max_bytes": 16000},
+    )
+    assert result["sources"][0]["message_id"] == bank
+    assert result["sources"][0]["relation"] == "outcome_query"
+    assert "REF12345 refund received" in result["sources"][0]["text"]
+    found = [s["message_id"] for s in result["sources"]]
+    while result["has_more"]:
+        result = await call(server, "related_mail", result["next_call"]["arguments"])
+        assert wire_size(result) <= 16000
+        found.extend(s["message_id"] for s in result["sources"])
+    assert set(found) == {bank, *keys}

@@ -8,7 +8,7 @@ import sqlite3
 import time
 
 from .evidence import MAX_MESSAGE_CHARS, citation, resolve
-from .lexical import predicate
+from .lexical import predicate, register_correspondence, ranked_hits
 from .retrieval import Pages, coverage_summary, serialize, wire_size
 
 
@@ -24,23 +24,16 @@ def correspondence_keys(
     catalog, selected, *, max_bytes=64 * 1024 * 1024, scan_seconds=5, clock=time.monotonic
 ):
     """Optional, explicitly limited scope; apply before dense/BM25 ranking."""
-    where, args = predicate(catalog, selected)
+    where, args = predicate(catalog, {**selected, "correspondence_only": True})
     deadline = clock() + scan_seconds
     with closing(catalog.connect()) as db:
         db.set_progress_handler(lambda: int(clock() >= deadline), 1000)
-        db.create_function(
-            "reply_subject",
-            1,
-            lambda s: bool(re.match(r"^\s*(?:re|fw|fwd)\s*:", str(s or ""), re.I)),
-            deterministic=True,
-        )
+        register_correspondence(db)
         keys, size = [], 0
         try:
             for row in db.execute(
                 "SELECT m.key FROM messages m LEFT JOIN message_dates md ON md.key=m.key WHERE "
-                + where
-                + " AND (reply_subject(json_extract(m.metadata,'$.subject')) OR EXISTS "
-                "(SELECT 1 FROM documents d WHERE d.message_key=m.key AND d.active=1 AND d.folder='Sent'))",
+                + where,
                 args,
             ):
                 if clock() >= deadline:
@@ -95,14 +88,22 @@ class RelatedMail:
         )
         return active and (self.state is None or self.state.phases([key]).get(key) == "ready")
 
-    def query(self, *, message_id=None, subject=None, max_bytes=None, cursor=None):
+    def query(
+        self, *, message_id=None, subject=None, max_bytes=None, cursor=None, outcome_query=None
+    ):
         if cursor:
-            if message_id is not None or subject is not None or max_bytes is not None:
+            if (
+                message_id is not None
+                or subject is not None
+                or max_bytes is not None
+                or outcome_query is not None
+            ):
                 raise ValueError("Continue with cursor alone")
             snapshot, offset = self.pages.resume(cursor, None)
             saved = json.loads(snapshot.signature)
             max_bytes = saved["max_bytes"]
             seed_key = saved["seed"]
+            outcome_query = saved["outcome_query"]
         else:
             max_bytes = 16000 if max_bytes is None else max_bytes
             if not 4000 <= max_bytes <= 32000:
@@ -155,6 +156,40 @@ class RelatedMail:
                     raise ValueError(
                         "More than 1000 related candidates; narrow the subject or use search_mail with date filters"
                     )
+                thread_keys = {row["key"] for row in rows}
+                outcomes = (
+                    ranked_hits(
+                        self.catalog,
+                        outcome_query,
+                        {},
+                        10,
+                        exclude_ids=thread_keys,
+                        scan_seconds=max(0, deadline - self.clock()),
+                        clock=self.clock,
+                    )
+                    if outcome_query is not None
+                    else []
+                )
+                if outcome_query is not None:
+                    outcomes += ranked_hits(
+                        self.catalog,
+                        outcome_query,
+                        {},
+                        10,
+                        message_ids=thread_keys,
+                        scan_seconds=max(0, deadline - self.clock()),
+                        clock=self.clock,
+                    )
+                outcome_keys = {hit["metadata"]["docSource"] for hit in outcomes}
+                # Separate keyword matches are candidates, not an inferred completed action.
+                # Place them first so a long quoted thread cannot hide decisive evidence.
+                extra = [
+                    self.catalog.message(key=hit["metadata"]["docSource"])
+                    for hit in outcomes
+                    if hit["metadata"]["docSource"] not in thread_keys
+                ]
+                rows = [row for row in extra if row is not None] + rows
+                outcome_passages = {hit["metadata"]["docSource"]: hit["text"] for hit in outcomes}
                 units = []
                 for row in rows:
                     if self.clock() >= deadline:
@@ -171,7 +206,17 @@ class RelatedMail:
                         )
                     if len(cached["text"]) > MAX_MESSAGE_CHARS:
                         raise ValueError("Related message exceeds text limit; use read_mail by ID")
-                    text = body_excerpt(cached["text"])
+                    text = (
+                        outcome_passages[row["key"]]
+                        if row["key"] in outcome_keys and row["key"] not in thread_keys
+                        else body_excerpt(cached["text"])
+                    )
+                    if (
+                        row["key"] in outcome_keys
+                        and row["key"] in thread_keys
+                        and len(text) > 1600
+                    ):
+                        text = text[:400] + "\n…\n" + outcome_passages[row["key"]]
                     md = json.loads(row["metadata"])
                     units.append(
                         {
@@ -181,17 +226,28 @@ class RelatedMail:
                                 for k in ["subject", "sender", "date"]
                             },
                             "text": text[:1600],
-                            "display_truncated": len(text) > 1600,
+                            "display_truncated": len(text) > 1600 or row["key"] in outcome_keys,
                             "quoted_history_omitted": False,
                             "extraction": {
                                 "text_truncated": cached["truncated"],
                                 "skipped_parts": json.loads(cached["skipped"]),
                             },
                             "untrusted": True,
+                            **(
+                                {
+                                    "relation": "outcome_query"
+                                    if row["key"] not in thread_keys
+                                    else "subject_participants"
+                                }
+                                if outcome_query is not None
+                                else {}
+                            ),
                         }
                     )
             snapshot = self.pages.create(
-                serialize({"seed": seed_key, "max_bytes": max_bytes}),
+                serialize(
+                    {"seed": seed_key, "max_bytes": max_bytes, "outcome_query": outcome_query}
+                ),
                 [u["message_id"] for u in units],
                 False,
                 payload=units,
@@ -211,6 +267,20 @@ class RelatedMail:
             "exhaustive": False,
             "notice": "Related candidates share normalized subjects and at least two participant addresses; newest first. Renamed subjects/other addresses may be missed. Body excerpts can include quoted history; do not treat quoted promises as new commitments. Clipped bodies do not establish absence in a whole message. No matches do not prove noncompletion. Cite supported facts and disclose examined scope. Follow next_call only for exhaustive investigation or a specific missing fact; do not claim absence in unread candidates.",
         }
+        if outcome_query is not None:
+            result["outcome_query"] = outcome_query[:200]
+            if len(outcome_query) > 200:
+                result["outcome_query_truncated"] = True
+            result["notice"] = result["notice"].replace(
+                "Related candidates share normalized subjects and at least two participant addresses; newest first.",
+                "Thread candidates share normalized subjects and participants, newest first; separate outcome candidates are keyword-ranked and displayed first.",
+            )
+            result["outcome_scope"] = (
+                "Up to ten additional ranked keyword candidates outside the matched thread, across indexed mail; no sender, subject or correspondence restriction. Up to ten thread matches also receive keyword passages."
+            )
+            result["notice"] += (
+                " Outcome-query matches are candidates; verify identity, chronology and authored text before treating them as confirmation."
+            )
         with closing(self.catalog.connect()) as db:
             if not self._active(db, seed_key):
                 raise ValueError("Seed message is unavailable or not committed; repeat search")
@@ -260,4 +330,6 @@ class RelatedMail:
             if result["has_more"]
             else None
         )
+        if wire_size(result) > max_bytes:
+            raise ValueError("Related framing exceeds page budget; increase max_bytes")
         return result

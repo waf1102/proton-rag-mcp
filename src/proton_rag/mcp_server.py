@@ -2,10 +2,11 @@
 
 import json
 import os
+from itertools import zip_longest
 from functools import partial
 from typing import Annotated, Literal
 from urllib.parse import quote, unquote, urlsplit
-from pydantic import Field, BaseModel
+from pydantic import Field, BaseModel, ConfigDict
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations, CallToolResult, TextContent
 from .runtime import load_index
@@ -29,9 +30,32 @@ from .retrieval import (
 
 
 class ReadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     message_id: Annotated[str, Field(min_length=1, max_length=2000)]
     offset: Annotated[int, Field(ge=0)] = 0
     length: Annotated[int, Field(ge=1, le=50000)] = 2000
+
+
+class MailMCP(FastMCP):
+    """Reject misspelled/unsupported filters instead of silently widening a search."""
+
+    async def list_tools(self):
+        tools = await super().list_tools()
+        for tool in tools:
+            tool.inputSchema = {**tool.inputSchema, "additionalProperties": False}
+        return tools
+
+    async def call_tool(self, name, arguments):
+        tool = next((t for t in await self.list_tools() if t.name == name), None)
+        if tool is not None:
+            supported = tool.inputSchema.get("properties", {})
+            unknown = sorted(set(arguments) - set(supported))
+            if unknown:
+                raise ValueError(
+                    f"Unsupported argument(s) for {name}: {', '.join(unknown)}. "
+                    f"Use its tool schema; supported arguments: {', '.join(supported) or '(none)'}"
+                )
+        return await super().call_tool(name, arguments)
 
 
 def packed(value, *, result_format="both"):
@@ -89,7 +113,7 @@ def build(catalog, backend, api_key=None, settings=None):
     read_pages = Pages()
     evidence = Evidence(catalog, getattr(backend, "state", None))
     related = RelatedMail(catalog, getattr(backend, "state", None))
-    server = FastMCP(
+    server = MailMCP(
         "proton-mail-rag",
         log_level="CRITICAL",
         instructions=(
@@ -99,7 +123,7 @@ def build(catalog, backend, api_key=None, settings=None):
             "expressions in hybrid queries. For exchanges between people use correspondence_only=true "
             "and disclose that narrower scope. Load only the schema needed for the next call. If results are unrelated, reformulate the underlying "
             "event once. For an ordinary question, use at most three retrieval calls: initial search, one refinement if needed, and one focused verification. Then answer with supported findings and coverage, or say the evidence is inconclusive. Do not keep searching to fill an answer. "
-            "For identifiers/known phrases use grep_mail with combined "
+            "Include lexical_query in hybrid search for likely keyword alternatives/stems instead of another exploratory call. For promise/financial verification use related_mail with outcome_query to check thread replies and other-subject/sender keyword evidence in one call. An old missing update is not proof of a never-confirmed promise. If verification is incomplete, say unknown. If results miss, say no supported example found in these results, never that there are none. For identifiers/known phrases use grep_mail with combined "
             "terms; for exact indexed lists use search_mail(mode='exact'). Search tools include coverage; "
             "index_status is only for diagnostics. Check related_mail for later replies before describing "
             "a promise as unresolved. No search proves that confirmation was never sent: say what was "
@@ -139,22 +163,36 @@ def build(catalog, backend, api_key=None, settings=None):
             list[Annotated[str, Field(min_length=1, max_length=4000)]] | None,
             Field(max_length=2),
         ] = None,
+        lexical_query: Annotated[
+            str | None,
+            Field(
+                max_length=4000,
+                description="Optional FTS5 keyword alternatives/stems combined with hybrid search. Hybrid only; in exact mode put the expression in query and omit this field.",
+            ),
+        ] = None,
     ) -> CallToolResult:
-        """Find evidence for a fast, concise answer with links using returned citation values.
+        """Find evidence for a fast answer with Markdown links using returned citation values.
 
-        For meaning-based questions, start with mode="hybrid", a short natural description,
-        up to two alternate_queries with different likely wording, and max_bytes=16000.
-        Omit Boolean syntax, request framing and "never confirmed" wording from hybrid queries.
-        Coverage is included; index_status is only for diagnostics. Answer once facts are
-        supported. For ordinary questions use at most three retrieval calls total: initial search,
-        one refinement if needed, and focused verification. A question asking whether something
-        ever happened needs one verified example. Then answer with citation links and coverage,
-        or say inconclusive; do not keep searching to fill an answer.
-        Before calling a promise unresolved, check later outcomes; a receipt/payment can have
-        another sender/subject. Search identifying terms or amounts without sender or
-        correspondence restrictions when relevant. Say "no confirmation found in examined
-        messages", never claim universal absence. Distinguish reported costs from assessed
-        penalties and completed travel from reservations. Do not reconcile amounts by assumption.
+        Start with a short natural-language query, up to two alternate_queries, max_bytes=16000,
+        and correspondence_only=true for personal conversations. Include lexical_query with
+        specific likely words/stems in FTS5 syntax (e.g. reschedul* OR postpon*). Keyword hits
+        interleave with semantic hits within limit and share filters. Hybrid query/alternates
+        remain natural language; omit Boolean syntax and "never confirmed" framing there.
+
+        Returned passages are usable evidence. If one answers the question, ANSWER NOW with
+        Markdown citation links and coverage. Do not repeat it as grep or read full text just
+        to double-check. An ordinary question needs one discovery call and only necessary
+        verification; at most three retrieval calls total. Refine once only if no relevant
+        candidate was found. Exhaustive investigation requires an explicit request.
+
+        Promises/financial disputes need verification: use related_mail(message_id=..., outcome_query=...)
+        combining a quoted amount/reference AND likely completion words (e.g. refund OR received
+        OR completed); avoid an amount alone when repeated in quoted threads. It checks replies and
+        different-sender/subject candidates together. Same-thread replies alone can miss receipts.
+        If verification is incomplete, report unknown status. An old delay does not establish
+        a promise that never received confirmation. If retrieval misses, say no supported
+        example was found in these results, not that none exist. Distinguish reported payments
+        from assessed penalties and reservations from completed travel; do not invent arithmetic.
 
         Hybrid mode is a bounded relevance ranking, never an exhaustive mail list. Exact mode
         enumerates indexed FTS5 terms, quoted phrases and AND/OR/NOT expressions. Empty exact
@@ -162,7 +200,7 @@ def build(catalog, backend, api_key=None, settings=None):
         an exact membership. sent_after is inclusive and sent_before exclusive ISO UTC bounds
         on email HEADER dates, not event dates in the body. Alternate hybrid queries run together,
         sharing filters, and interleave unique messages within limit; coverage remains bounded.
-        Default responses remain under 4 KB for compatibility.
+        Legacy default responses remain under 4 KB; adding lexical_query defaults to 16 KB.
         For personal exchanges obscured by newsletters/notices, correspondence_only=true
         limits candidates BEFORE ranking to reply/forward subjects or Sent membership.
         It can miss direct incoming messages; disclose this scope. Default false.
@@ -187,6 +225,7 @@ def build(catalog, backend, api_key=None, settings=None):
                 saved_bytes,
                 saved_correspondence,
                 saved_alternatives,
+                saved_lexical,
             ) = json.loads(snapshot.signature)
             query = saved_query if query is None else query
             limit = saved_limit if limit is None else limit
@@ -198,6 +237,7 @@ def build(catalog, backend, api_key=None, settings=None):
             alternate_queries = (
                 saved_alternatives if alternate_queries is None else alternate_queries
             )
+            lexical_query = saved_lexical if lexical_query is None else lexical_query
             selected = {
                 key: saved_filters[key] if value is None else value
                 for key, value in selected.items()
@@ -206,7 +246,9 @@ def build(catalog, backend, api_key=None, settings=None):
             query = "" if query is None else query
             limit = settings.search_default if limit is None else limit
             mode = "hybrid" if mode is None else mode
-            max_bytes = BUDGET if max_bytes is None else max_bytes
+            max_bytes = (
+                (16000 if lexical_query is not None else BUDGET) if max_bytes is None else max_bytes
+            )
             correspondence_only = False if correspondence_only is None else correspondence_only
             alternate_queries = [] if alternate_queries is None else alternate_queries
         if not query.strip() and (
@@ -215,10 +257,23 @@ def build(catalog, backend, api_key=None, settings=None):
             raise ValueError("An empty query requires exact mode with filters")
         if alternate_queries and mode != "hybrid":
             raise ValueError("alternate_queries requires hybrid mode")
+        if lexical_query is not None and mode != "hybrid":
+            raise ValueError(
+                "lexical_query requires hybrid mode; for exact mode put the expression in query and omit lexical_query and alternate_queries"
+            )
         if any(not q.strip() for q in alternate_queries):
             raise ValueError("Use nonblank alternate_queries")
         signature = json.dumps(
-            [query, limit, mode, selected, max_bytes, correspondence_only, alternate_queries],
+            [
+                query,
+                limit,
+                mode,
+                selected,
+                max_bytes,
+                correspondence_only,
+                alternate_queries,
+                lexical_query,
+            ],
             sort_keys=True,
         )
         folder = selected["folder"]
@@ -240,12 +295,29 @@ def build(catalog, backend, api_key=None, settings=None):
                     kwargs["message_ids"] = correspondence_keys(catalog, selected)
                 elif any(v is not None for v in selected.values()):
                     kwargs["message_ids"] = lexical.candidates(catalog, "", selected, exact=False)
+                lexical_hits = (
+                    lexical.ranked_hits(
+                        catalog,
+                        lexical_query,
+                        {**selected, "correspondence_only": correspondence_only},
+                        min(limit, 10),
+                    )
+                    if lexical_query is not None
+                    else []
+                )
                 try:
                     results = await search_variants(
                         backend, [query, *alternate_queries], limit, **kwargs
                     )
                 except Exception:
                     raise ValueError("Local retrieval unavailable") from None
+                if lexical_hits:
+                    results = [
+                        hit
+                        for row in zip_longest(lexical_hits, results)
+                        for hit in row
+                        if hit is not None
+                    ]
                 hits = hydrate(catalog, results, limit, settings)
                 if "message_ids" in kwargs:
                     allowed = set(kwargs["message_ids"])
@@ -278,10 +350,20 @@ def build(catalog, backend, api_key=None, settings=None):
         }
         if snapshot.exact:
             result["match_count"] = len(snapshot.keys)
+        if lexical_query is not None:
+            result["lexical_query"] = lexical_query[:200]
+            if len(lexical_query) > 200:
+                result["lexical_query_truncated"] = True
         if correspondence_only:
             result["retrieval_scope"] = (
                 "Reply/forward subjects or Sent membership; other mail excluded."
             )
+        more_notice = "More results remain. Answer from sufficient passages with Markdown citation links and scope; continue only for exhaustive requests or a specific missing fact."
+        complete_notice = (
+            "Selected results complete. Answer from sufficient passages now; do not repeat searches just to double-check. Use Markdown citation links and scope; hybrid ranking is bounded."
+            if not snapshot.exact
+            else "Indexed matches complete. Cite sources; header dates are not event dates."
+        )
         # Fetch only a page's selected messages. Deleted IDs are consumed, never exposed.
         batch_end = offset
         state = getattr(backend, "state", None)
@@ -330,7 +412,7 @@ def build(catalog, backend, api_key=None, settings=None):
                     "arguments": {"cursor": pages.token(snapshot, offset + 1)},
                 },
                 "remaining_count": len(snapshot.keys) - offset - 1,
-                "notice": "Selected results complete. Cite supported facts and scope; hybrid ranking is bounded.",
+                "notice": max((more_notice, complete_notice), key=lambda s: len(s.encode())),
             }
             if wire_size(trial) > max_bytes:
                 if result["sources"]:
@@ -358,13 +440,9 @@ def build(catalog, backend, api_key=None, settings=None):
             if result["has_more"]
             else None
         )
-        result["notice"] = (
-            "More results remain. Cite supported facts and scope; page for exhaustive requests."
-            if result["has_more"]
-            else "Selected results complete. Cite supported facts and scope; hybrid ranking is bounded."
-            if not snapshot.exact
-            else "Indexed matches complete. Cite sources; header dates are not event dates."
-        )
+        result["notice"] = more_notice if result["has_more"] else complete_notice
+        if wire_size(result) > max_bytes:
+            raise ValueError("Search framing exceeds page budget; increase max_bytes")
         return pack(result)
 
     @server.tool(annotations=read)
@@ -607,16 +685,32 @@ def build(catalog, backend, api_key=None, settings=None):
         subject: Annotated[str | None, Field(max_length=1000)] = None,
         max_bytes: Annotated[int | None, Field(ge=4000, le=32000)] = None,
         cursor: Annotated[str | None, Field(max_length=200)] = None,
+        outcome_query: Annotated[
+            str | None,
+            Field(
+                max_length=4000,
+                description="Optional FTS5 query across all indexed mail. Combine a quoted amount/reference AND completion words, e.g. refund OR received OR completed, to avoid repeated quoted requests. Includes different senders/subjects; matches are candidates, not inferred completion.",
+            ),
+        ] = None,
     ) -> CallToolResult:
         """Check replies/follow-ups to a found email, newest first, with cited body excerpts.
 
-        For ordinary questions use at most three retrieval calls total. Use this as focused
-        verification, then answer with citation links
-        and examined scope. Inspect the newest authored text before promises quoted below it.
-        Completion can be a receipt/payment under another sender/subject: when relevant use a
-        focused search_mail or grep_mail for identifying terms/amounts across the mailbox.
+        For promises or financial disputes, include outcome_query: an FTS5 query using a quoted
+        amount/reference AND likely completion words, e.g. refund OR received OR completed.
+        An amount alone can be dominated by quoted requests. This adds up to ten ranked candidates
+        across ALL indexed mail, with no sender/subject/correspondence filter, in the SAME call
+        as the replies, excluding already included thread IDs from those ten slots. Up to ten
+        matching replies also receive keyword passages. Matches are potential evidence, not proof of the same transaction.
+        They appear first with relation="outcome_query"; thread matches retain newest-first order.
+        Omit outcome_query to keep subject/participant matching only. Use cursor alone to resume.
+        For ordinary questions reserve this verification after the initial candidate search,
+        then answer with citation links and scope; do not spend the budget on more exploration. Inspect the newest authored text before promises quoted below it.
+        Completion can be a receipt/payment under another sender/subject. If outcome_query is
+        insufficient, use a focused mailbox-wide search_mail or grep_mail only for a specific
+        missing fact. A resolved example must not be called unconfirmed merely because an old
+        quoted request was unanswered at that time. If verification is incomplete, say unknown.
         Say "no confirmation found in examined messages", not proof of noncompletion.
-        Start with its message_id or citation. Candidates share the normalized subject and
+        Start with its message_id or citation. Thread candidates share the normalized subject and
         at least two participant addresses. Optional subject is a substring for renamed
         exchanges. This heuristic can miss other subjects/addresses; it is not an exhaustive
         RFC thread or proof something never happened. Default 16 KB, configurable 4–32 KB.
@@ -628,7 +722,11 @@ def build(catalog, backend, api_key=None, settings=None):
         """
         return pack(
             related.query(
-                message_id=message_id, subject=subject, max_bytes=max_bytes, cursor=cursor
+                message_id=message_id,
+                subject=subject,
+                max_bytes=max_bytes,
+                cursor=cursor,
+                outcome_query=outcome_query,
             )
         )
 
@@ -640,6 +738,7 @@ def build(catalog, backend, api_key=None, settings=None):
         sender: Annotated[str | None, Field(max_length=1000)] = None,
         subject: Annotated[str | None, Field(max_length=1000)] = None,
         folder: Annotated[str | None, Field(max_length=2000)] = None,
+        correspondence_only: bool | None = None,
         message_ids: Annotated[
             list[Annotated[str, Field(min_length=1, max_length=2000)]] | None,
             Field(min_length=1, max_length=100),
@@ -668,6 +767,8 @@ def build(catalog, backend, api_key=None, settings=None):
         32000); a generated-output file read can save retrieval rounds. Answer directly when
         passages support facts. Refine only a missing fact/conflict, reusing message_ids.
         Header-date filters are inclusive sent_after/exclusive sent_before, not event dates.
+        correspondence_only=true restricts scans to reply/forward subjects or Sent mail;
+        it can miss direct incoming confirmations. Drop it for mailbox-wide outcome checks.
         Reservations/standby do not confirm travel. search_complete describes the cached-text
         scan; matched_messages is the initial snapshot count, displayed_messages this page.
         has_more means undisplayed evidence: cursor-only next_call continues for ten minutes;
@@ -679,7 +780,10 @@ def build(catalog, backend, api_key=None, settings=None):
         return pack(
             evidence.query(
                 pattern=pattern,
-                selected=filters(sent_after, sent_before, sender, subject, folder),
+                selected={
+                    **filters(sent_after, sent_before, sender, subject, folder),
+                    "correspondence_only": correspondence_only,
+                },
                 message_ids=message_ids,
                 context=context,
                 max_bytes=max_bytes,

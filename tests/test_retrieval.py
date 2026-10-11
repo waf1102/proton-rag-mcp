@@ -48,6 +48,38 @@ async def test_hybrid_keeps_winning_passage_instead_of_header_keyword(tmp_path):
     assert passage in result["sources"][0]["text"]
 
 
+async def test_hybrid_lexical_fallback_recovers_deep_fact_and_preserves_scope(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    keys = seed(catalog, 3, text="Advertisement about calendar changes")
+    catalog.store_text(
+        keys[1], "Layout\n" * 500 + "We need to reschedule the appointment.", [], False
+    )
+    catalog.store_text(keys[2], "We need to reschedule the appointment.", [], False)
+    with catalog.connect() as db:
+        md = json.loads(
+            db.execute("SELECT metadata FROM messages WHERE key=?", (keys[1],)).fetchone()[0]
+        )
+        md["subject"] = "Re: Appointment request"
+        db.execute("UPDATE messages SET metadata=? WHERE key=?", (json.dumps(md), keys[1]))
+    server = build(catalog, Ranked([keys[0]], text="Advertisement about calendar changes"))
+    args = {
+        "query": "put off my visit",
+        "alternate_queries": ["change planned visit"],
+        "lexical_query": "reschedul* AND appointment",
+        "max_bytes": 16000,
+        "correspondence_only": True,
+    }
+    result = await call(server, "search_mail", args)
+    assert [s["message_id"] for s in result["sources"]] == [keys[1]]
+    assert "reschedule the appointment" in result["sources"][0]["text"]
+    assert result["exhaustive"] is False
+    assert result["lexical_query"] == args["lexical_query"]
+    with pytest.raises(Exception, match="hybrid"):
+        await server.call_tool("search_mail", {**args, "mode": "exact", "alternate_queries": []})
+    with pytest.raises(Exception, match="exact query"):
+        await server.call_tool("search_mail", {**args, "lexical_query": '"unfinished'})
+
+
 async def test_larger_hybrid_response_contains_evidence_and_preserves_budget_on_resume(tmp_path):
     catalog = Catalog(tmp_path / "catalog.db")
     passage = "日本語 🦊 " + "Useful evidence. " * 70
@@ -636,3 +668,97 @@ async def test_hybrid_alternatives_cursor_preserves_queries_and_rejects_changes(
     following = await call(server, "search_mail", result["next_call"]["arguments"])
     assert wire_size(following) <= 4000
     assert following["sources"][0]["message_id"] == keys[1]
+
+
+async def test_lexical_fallback_cursor_filters_and_default_ranking(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    passage = "日本語 🦊 " * 250 + " receipt corrected"
+    keys = seed(catalog, 10, text=passage)
+    server = build(catalog, Ranked(list(reversed(keys)), text=passage))
+    default = await call(server, "search_mail", {"query": "billing issue", "max_bytes": 16000})
+    assert default["sources"][0]["message_id"] == keys[-1]
+    assert "lexical_query" not in default
+    result = await call(
+        server,
+        "search_mail",
+        {
+            "query": "billing issue",
+            "lexical_query": "receipt AND corrected",
+            "max_bytes": 4000,
+            "sender": "air@",
+            "sent_after": "2018-08-01",
+            "sent_before": "2018-09-01",
+        },
+    )
+    assert result["has_more"]
+    found = [s["message_id"] for s in result["sources"]]
+    with pytest.raises(Exception, match="changed"):
+        await server.call_tool(
+            "search_mail", {"cursor": result["next_cursor"], "lexical_query": "other"}
+        )
+    while result["has_more"]:
+        result = await call(server, "search_mail", result["next_call"]["arguments"])
+        assert wire_size(result) <= 4000
+        assert result["lexical_query"] == "receipt AND corrected"
+        found.extend(s["message_id"] for s in result["sources"])
+    assert len(found) == len(set(found)) == len(keys)
+    empty = await call(
+        server,
+        "search_mail",
+        {
+            "query": "billing issue",
+            "lexical_query": "receipt",
+            "sent_after": "2019-01-01",
+        },
+    )
+    assert empty["sources"] == []
+
+
+async def test_lexical_long_unicode_query_empty_page_fits_minimum_budget(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    seed(catalog)
+    query = " OR ".join('"' + "未" * 80 + str(i) + '"' for i in range(40))
+    result = await call(
+        build(catalog, Ranked([])),
+        "search_mail",
+        {"query": "technical record", "lexical_query": query, "max_bytes": 3900},
+    )
+    assert wire_size(result) <= 3900
+    assert result["lexical_query_truncated"] is True
+
+
+async def test_keyword_passage_keeps_match_after_extremely_long_tokens(tmp_path):
+    from proton_rag.lexical import ranked_hits
+    from test_related_mail import message
+
+    catalog = Catalog(tmp_path / "catalog.db")
+    body = ("x" * 2000 + " ") * 40 + "Payment completed REF12345. " + "trailer " * 80
+    seed_key = message(catalog, 1, "Re: Record fix", "I will correct the record.")
+    receipt = message(catalog, 2, "Deposit", body, sender="bank@example.test")
+    hits = ranked_hits(catalog, "REF12345", {}, 10)
+    assert "Payment completed REF12345." in hits[0]["text"]
+    server = build(catalog, Ranked([]))
+    search_page = await call(
+        server,
+        "search_mail",
+        {"query": "record fix", "lexical_query": "REF12345", "max_bytes": 16000},
+    )
+    assert "REF12345" in search_page["sources"][0]["text"]
+    outcome = await call(
+        server, "related_mail", {"message_id": seed_key, "outcome_query": "REF12345"}
+    )
+    assert "REF12345" in next(s["text"] for s in outcome["sources"] if s["message_id"] == receipt)
+
+
+async def test_combined_search_default_budget_contains_useful_passages(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    keys = seed(catalog, 10, text="Corrected receipt REF12345. " * 100)
+    server = build(catalog, Ranked(keys, text="Corrected receipt REF12345. " * 100))
+    result = await call(
+        server, "search_mail", {"query": "corrected billing", "lexical_query": "REF12345"}
+    )
+    assert wire_size(result) <= 16000
+    assert len(result["sources"]) >= 6
+    assert "REF12345" in result["sources"][-1]["text"]
+    legacy = await call(server, "search_mail", {"query": "corrected billing"})
+    assert wire_size(legacy) <= 3900

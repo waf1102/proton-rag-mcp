@@ -4,8 +4,27 @@ import argparse
 import json
 import os
 import sqlite3
+import re
+import time
+from contextlib import closing
 from .index_state import exclusive_state
 from .config import Settings
+
+
+CORRESPONDENCE_SCOPE = "Reply/forward subjects or Sent membership; other mail excluded."
+CORRESPONDENCE_CLAUSE = (
+    "(reply_subject(json_extract(m.metadata,'$.subject')) OR EXISTS "
+    "(SELECT 1 FROM documents d WHERE d.message_key=m.key AND d.active=1 AND d.folder='Sent'))"
+)
+
+
+def register_correspondence(db):
+    db.create_function(
+        "reply_subject",
+        1,
+        lambda s: bool(re.match(r"^\s*(?:re|fw|fwd)\s*:", str(s or ""), re.I)),
+        deterministic=True,
+    )
 
 
 def initialize(db):
@@ -93,6 +112,8 @@ def predicate(catalog, filters):
         "EXISTS(SELECT 1 FROM documents d WHERE d.message_key=m.key AND d.active=1)",
     ]
     args = []
+    if filters.get("correspondence_only"):
+        clauses.append(CORRESPONDENCE_CLAUSE)
     with catalog.connect() as db:
         bound = db.execute("SELECT 1 FROM sqlite_master WHERE name='index_messages'").fetchone()
     if bound:
@@ -137,6 +158,7 @@ def candidates(catalog, query, filters, *, exact=True, max_bytes=64 * 1024 * 102
     ids, size = [], 0
     try:
         with catalog.connect() as db:
+            register_correspondence(db)
             for row in db.execute(sql, args):
                 size += len(row[0].encode())
                 if size > max_bytes:
@@ -164,6 +186,62 @@ def previews(catalog, keys, query):
             }
     except sqlite3.OperationalError:
         return {}
+
+
+def ranked_hits(
+    catalog,
+    query,
+    selected,
+    limit,
+    *,
+    scan_seconds=5,
+    clock=time.monotonic,
+    message_ids=None,
+    exclude_ids=None,
+):
+    """Bounded full-text candidates and deep-body passages for one combined retrieval call."""
+    if not query or not query.strip():
+        raise ValueError("Use a nonblank exact query")
+    if not status(catalog)["lexical_ready"]:
+        raise ValueError("Exact search unavailable until lexical backfill completes")
+    where, args = predicate(catalog, selected)
+    for keys, op in [(message_ids, "IN"), (exclude_ids, "NOT IN")]:
+        if keys is not None:
+            where += f" AND m.key {op} (SELECT value FROM json_each(?))"
+            args.append(json.dumps(list(keys)))
+    deadline = clock() + scan_seconds
+    try:
+        with closing(catalog.connect()) as db:
+            register_correspondence(db)
+            db.set_progress_handler(lambda: int(clock() >= deadline), 1000)
+            rows = db.execute(
+                "WITH passages AS (SELECT m.key,snippet(mail_fts,3,char(1),char(2),'…',64) AS text "
+                "FROM messages m JOIN mail_fts ON mail_fts.rowid=m.rowid "
+                "LEFT JOIN message_dates md ON md.key=m.key WHERE "
+                + where
+                + " AND mail_fts MATCH ? ORDER BY bm25(mail_fts,0,5,2,1),m.key LIMIT ?) "
+                "SELECT key,substr(text,max(1,instr(text,char(1))-240),1800) AS text FROM passages",
+                [*args, query, limit],
+            ).fetchall()
+            if clock() >= deadline:
+                raise ValueError(
+                    "Exact candidate search time limit reached; narrow the query or filters"
+                )
+    except sqlite3.OperationalError as error:
+        if "interrupt" in str(error):
+            raise ValueError(
+                "Exact candidate search time limit reached; narrow the query or filters"
+            ) from None
+        raise ValueError(
+            "Invalid exact query; use FTS5 terms, quoted phrases, AND, OR or NOT"
+        ) from None
+    return [
+        {
+            "text": row["text"].replace("\x01", "").replace("\x02", "")[:1600],
+            "metadata": {"docSource": row["key"]},
+        }
+        for row in rows
+    ]
 
 
 def main():
