@@ -37,3 +37,15 @@ def test_qdrant_and_ollama_settings_are_shared_and_loopback_only():
     assert settings.workspace == "mail-copy"
     with pytest.raises(ValueError):
         Settings.from_env({"QDRANT_URL": "https://remote.example"})
+
+
+@pytest.mark.parametrize("ranking", ["legacy", "ensemble"])
+def test_search_ranking_can_be_selected_without_changing_index_profile(ranking):
+    settings = Settings.from_env({"RAG_SEARCH_RANKING": ranking})
+    assert settings.search_ranking == ranking
+    assert settings.embedding_model == Settings().embedding_model
+
+
+def test_unknown_search_ranking_is_rejected():
+    with pytest.raises(ValueError, match="RAG_SEARCH_RANKING"):
+        Settings.from_env({"RAG_SEARCH_RANKING": "typo"})

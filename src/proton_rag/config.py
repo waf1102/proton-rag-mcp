@@ -33,6 +33,7 @@ class Settings:
     max_parts: int = 200
     search_default: int = 10
     search_max: int = 50
+    search_ranking: str = "ensemble"
     excerpt_chars: int = 4000
     answer_sources: int = 5
     max_output: int = 1024
@@ -87,6 +88,8 @@ class Settings:
             raise ValueError("Chunk target must exceed overlap")
         if result.search_default > result.search_max or result.answer_sources > result.search_max:
             raise ValueError("Default retrieval limits must not exceed RAG_SEARCH_MAX")
+        if result.search_ranking not in {"legacy", "ensemble"}:
+            raise ValueError("RAG_SEARCH_RANKING must be legacy or ensemble")
         if result.imap_port > 65535:
             raise ValueError("Invalid IMAP port")
         if result.warn_free_bytes < result.min_free_bytes:

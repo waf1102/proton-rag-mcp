@@ -291,3 +291,58 @@ def test_partial_write_restart_replays_without_embedding_variation(tmp_path):
     reopened.recover(key, text)
     assert reopened.state.ready(key)
     assert len(service.points) == len(reopened.state.entry(key)["points"])
+
+
+async def test_consensus_candidates_obey_scope_commit_and_passage_validation(tmp_path):
+    import copy
+    import json
+
+    class ConsensusService(Service):
+        def __call__(self, request):
+            if request.url.path.endswith("/points/query/groups"):
+                body = json.loads(request.content)
+                # The mock intentionally ignores server filters: the client must also enforce scope.
+                if body["query"].get("rrf"):
+                    return super().__call__(request)
+                return httpx.Response(200, json={"result": {"groups": []}})
+            return super().__call__(request)
+
+    catalog, state, backend, service = setup_index(tmp_path, service=ConsensusService())
+    keys = ["proton-mail-" + c * 64 for c in "abcdef"]
+    for i, key in enumerate(keys):
+        catalog.intent(key, "fixtures", "1", str(i + 1), key, True, {})
+        backend.ensure(key, f"Invoice {i}")
+        catalog.activate(key, [key])
+    points = copy.deepcopy(service.points)
+    for point in service.points.values():
+        key = point["payload"]["message_id"]
+        if key == keys[2]:
+            point["payload"]["checksum"] = "bad"
+        if key == keys[3]:
+            point["payload"]["profile"] = "other"
+    with catalog.connect() as db:
+        db.execute("UPDATE index_messages SET phase='pending' WHERE key=?", (keys[4],))
+        db.execute("UPDATE documents SET active=0 WHERE message_key=?", (keys[5],))
+    hits = await backend.search("invoice", 10, message_ids=[keys[0], *keys[2:]])
+    assert [h["metadata"]["docSource"] for h in hits] == [keys[0]]
+    assert hits[0]["text"] == points[next(iter(points))]["payload"]["text"]
+    assert await backend.search("invoice", 10, message_ids=[]) == []
+
+
+async def test_legacy_ranking_remains_available_and_does_not_request_consensus(tmp_path):
+    import json
+    from dataclasses import replace
+
+    class LegacyService(Service):
+        def __call__(self, request):
+            if request.url.path.endswith("/points/query/groups"):
+                assert json.loads(request.content)["query"] == {"fusion": "rrf"}
+            return super().__call__(request)
+
+    catalog, _, backend, _ = setup_index(tmp_path, service=LegacyService())
+    backend.settings = replace(backend.settings, search_ranking="legacy")
+    key = "proton-mail-" + "f" * 64
+    catalog.intent(key, "fixtures", "1", "7", key, True, {})
+    backend.ensure(key, "Supported original invoice")
+    catalog.activate(key, [key])
+    assert (await backend.search("invoice", 10))[0]["text"] == "Supported original invoice"

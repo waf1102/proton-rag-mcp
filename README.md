@@ -282,6 +282,7 @@ Restart the MCP server in your client. `answer_mail` will appear alongside `sear
 | [Privacy & security](docs/security.md) | Mail access, local storage, and what leaves your machine. |
 | [Fedora deployment](docs/fedora.md) | Fedora-specific setup and migration notes. |
 | [Validation](docs/validation.md) | Test commands, live checks, and deployment coverage. |
+| [Retrieval ranking evaluation](docs/ranking-validation.md) | Known-evidence recovery, local latency, Gemini limits and legacy rollback. |
 | [Completed Qdrant migration](docs/qdrant-migration-validation.md) | Verified transfer counts, live cutover, recovery rehearsal, and remaining indexing. |
 
 ## Contributing
