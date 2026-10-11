@@ -19,7 +19,7 @@ The private read-only catalog contains 22,354 messages. Thirty-six manually sele
 
 Twelve queries were used for tuning; twelve validation and twelve additional confirmation queries checked candidate changes. Several candidate designs were rejected during exploration. This is a small exploratory evaluation, not an independently administered benchmark. The final ensemble parameters were selected using training results. Private queries, message IDs and email text are not committed.
 
-The final live benchmark alternates strategy order, includes query embedding and client-side validation in timing, and repeats each query three times. Both strategies use the same frozen catalog, index/profile and local services. Each strategy has 108 query trials; repeats are correlated observations of 36 cases, not 108 independent labels.
+The final live benchmark alternates strategy order, includes query embedding and client-side validation in timing, and repeats each query three times. Both strategies use the same frozen catalog, shared local index/profile and services. The live index continued ordinary ingestion and had one additional message by the final content audit; the read-only catalog excludes that message from returned evidence. All 22,354 frozen message records, cached texts and commit manifests remained identical to live entries, and the frozen database hash was unchanged. The index is shared, rather than a separately restored immutable collection, so new-mail/tie effects remain a reproducibility limitation. Each strategy has 108 query trials; repeats are correlated observations of 36 cases, not 108 independent labels.
 
 | Metric | Previous ranking | Ensemble |
 | --- | ---: | ---: |
@@ -50,13 +50,18 @@ The script opens SQLite read-only and prints aggregate metrics without query tex
 
 Use the same three ordinary questions recorded in [the semantic mail evaluation](semantic-mail-validation.md), fresh `gemini-3.1-pro-high` sessions, unchanged server workflow instructions and a neutral instruction selecting the frozen-mailbox test server. Count schemas, generated-output reads and attempted MCP calls. Empty timeout answers fail even if the client reports success.
 
-One candidate run per question used a 90-second client ceiling:
+One baseline and one candidate run per question used a 90-second client ceiling. All six produced empty timeout answers:
 
-| Question | Final answer | Wall time | Total calls | MCP calls | MCP time | Reported agent time |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| Trip | Empty timeout | 93.2 s | 11 | 4 | 12.6 s | 70.8 s |
-| Promises | Empty timeout | 92.1 s | 9 | 3 | 3.0 s | 82.6 s |
-| Financial | Empty timeout | 92.2 s | 12 | 3 | 6.9 s | 81.0 s |
+| Ranking | Question | Wall time | Total calls | MCP calls | MCP time | Reported agent time | Viewed/inline bytes | Serialized MCP bytes |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Legacy | Trip | 92.2 s | 12 | 4 | 6.8 s | 72.6 s | 48,732 | 111,632 |
+| Ensemble | Trip | 93.2 s | 11 | 4 | 12.6 s | 70.8 s | 49,959 | 82,811 |
+| Legacy | Promises | 92.0 s | 6 | 2 | 2.2 s | 83.9 s | 21,658 | 39,311 |
+| Ensemble | Promises | 92.1 s | 9 | 3 | 3.0 s | 82.6 s | 49,781 | 88,042 |
+| Legacy | Financial | 92.3 s | 10 | 3 | 2.2 s | 83.0 s | 42,095 | 86,243 |
+| Ensemble | Financial | 92.2 s | 12 | 3 | 6.9 s | 81.0 s | 83,662 | 149,978 |
+
+Viewed bytes use client-reported schema/generated-file byte counts plus inline output. Serialized MCP results include duplicate text/structured representations and can exceed the tool's text budget. Counts include attempted calls at the cutoff. Query paths and answer depth are model-selected. Neither tool-call reduction nor token/payload savings are established by these runs.
 
 These are diagnostic samples, not three-repeat acceptance measurements. Parts of candidate timing overlapped local verification/benchmark work, so no causal end-to-end speed claim is supported. The promises/financial runs made three retrieval calls but still failed to complete. Final-answer factual accuracy and citation credit are zero for empty responses. Reported agent intervals include client/provider processing, not just inference.
 
@@ -65,3 +70,5 @@ The 30-second median, 60-second completion ceiling, eight-total-call target, dir
 ## Verification
 
 The complete suite passes 199 tests including an isolated real Qdrant ranking regression. Tests cover consensus-only candidates, active/committed checks, corruption/profile/scope exclusion, deduplication, limits, stable ordering, legacy selection and read-only benchmark input. Ruff and formatting pass. Python and TypeScript MCP clients pass fixture and frozen-mailbox interoperability, including stable citations, matched passages, grouped search, byte limits and the previously missed follow-up.
+
+Fresh independent whole-branch review found no blocking issues and independently passed 34 focused tests. Two nonblocking gaps are deferred: the public aggregate benchmark does not summarize per-case regressions (the private detailed capture supports this release's coverage check), and concurrent request failure/cancellation lacks a dedicated regression test. The reviewed failure path returns no partial ranking and retains existing read-only transport timeouts.
