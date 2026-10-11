@@ -21,16 +21,18 @@ try {
   if (!process.env.RAG_INTEROP_QUERY) assert.match(JSON.stringify(result), /Tuesday/);
   assert.match(JSON.stringify(result), /imap:\/\/\//);
   const hit = JSON.parse(result.content[0].text).sources[0];
-  const evidencePattern = live ? hit.text.slice(0, 32).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : 'ABC123';
+  const full = await client.callTool({name: 'read_mail', arguments: {message_id: hit.message_id, offset: live ? 0 : 20000}});
+  assert.equal(full.isError, false);
+  if (!live) assert.match(JSON.stringify(full), /ABC123/);
+  // Search previews can contain FTS ellipses; match original cached text instead.
+  const originalText = JSON.parse(full.content[0].text).text;
+  const evidencePattern = live ? originalText.slice(0, 32).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : 'ABC123';
   const evidence = await client.callTool({name: 'grep_mail', arguments: {pattern: evidencePattern, message_ids: [hit.message_id], max_bytes: 4000}});
   assert.equal(evidence.isError, false);
   assert.deepEqual(evidence.structuredContent, JSON.parse(evidence.content[0].text));
   assert.ok(Buffer.byteLength(evidence.content[0].text, 'utf8') <= 4000);
   assert.equal(JSON.parse(evidence.content[0].text).sources[0].citation, hit.citation);
   if (!live) assert.match(evidence.content[0].text, /ABC123/);
-  const full = await client.callTool({name: 'read_mail', arguments: {message_id: hit.message_id, offset: live ? 0 : 20000}});
-  assert.equal(full.isError, false);
-  if (!live) assert.match(JSON.stringify(full), /ABC123/);
   const batch = await client.callTool({name: 'read_mail_batch', arguments: {requests: [{message_id: hit.message_id, length: 128}, {message_id: 'unknown-fixture'}]}});
   assert.equal(batch.isError, false);
   assert.ok(Buffer.byteLength(batch.content[0].text, 'utf8') <= 3900);

@@ -46,10 +46,17 @@ async def run():
                 assert "Tuesday" in result.content[0].text
             assert "imap:///" in result.content[0].text
             hit = json.loads(result.content[0].text)["sources"][0]
+            original = None
+            if os.environ.get("RAG_INTEROP_QUERY"):
+                full = await client.call_tool(
+                    "read_mail", {"message_id": hit["message_id"], "length": 128}
+                )
+                assert not full.isError
+                original = json.loads(full.content[0].text)["text"]
             evidence = await client.call_tool(
                 "grep_mail",
                 {
-                    "pattern": re.escape(hit["text"][:32])
+                    "pattern": re.escape(original[:32])
                     if os.environ.get("RAG_INTEROP_QUERY")
                     else "ABC123",
                     "message_ids": [hit["message_id"]],

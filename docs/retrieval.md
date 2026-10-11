@@ -2,6 +2,8 @@
 
 Start with `grep_mail` for a fast cited answer. Combine related terms in one regex, use the returned coverage, and answer when its passages support the requested facts. Make another call only for a specific missing fact or conflict, reusing examined message IDs. Reserve exhaustive enumeration for explicit requests and otherwise disclose the limits of the displayed evidence.
 
+For a fast calendar-year answer, start with header dates from December 1 of the preceding year through January 1 of the following year (exclusive), and disclose that window. Broaden it for specific gaps or conflicts. Exhaustive event-year coverage requires broader or unbounded header dates because earlier bookings and later notices can describe events in the requested year. A ticket or boarding pass supports scheduled travel; it does not prove the trip occurred.
+
 ## Evidence passages
 
 ```json

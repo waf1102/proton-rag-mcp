@@ -88,8 +88,15 @@ def build(catalog, backend, api_key=None, settings=None):
         log_level="CRITICAL",
         instructions=(
             "Default to a fast cited answer with disclosed coverage; investigate exhaustively only "
-            "when requested. Start with one grep_mail pattern combining related terms and use its "
-            "coverage. Answer when passages support the facts; call again only for a specific "
+            "when requested. Keep the answer brief: requested facts, citations and one coverage "
+            "caveat. A ticket or boarding pass is evidence of scheduled travel, not proof it occurred. "
+            "Read the grep_mail schema first, then make one pattern combining "
+            "related terms with the relevant filters and default byte budget. For fast calendar year Y, "
+            "start with header dates from December 1 of Y-1 to January 1 of Y+1; disclose this bound "
+            "and widen for specific gaps or conflicts. Exhaustive event-year searches need broader "
+            "or unbounded header dates to find earlier bookings and later notices. "
+            "grep_mail includes coverage; index_status is unnecessary before it. "
+            "Answer when passages support the facts; call again only for a specific "
             "missing fact or conflict. Reuse examined message_ids; avoid overlapping searches. "
             "Read full messages only if passages are insufficient or exact formatting matters. "
             "Large evidence output may need one generated-output file read. For exhaustive lists, "
@@ -249,7 +256,8 @@ def build(catalog, backend, api_key=None, settings=None):
     async def index_status() -> CallToolResult:
         """Report indexed dates, folder counts, ingestion state and redacted failure reasons.
 
-        Check before searching older mail. Indexed dates describe only processed messages;
+        grep_mail already includes search coverage; call this only for ingestion diagnostics.
+        Indexed dates describe only processed messages;
         they are not the mailbox's full date range. Hybrid search is relevance-ranked, not exhaustive.
         Unique messages count content once; folder entries count each membership. The unique
         expected total is unknown until all selected content is indexed. Runtime timestamps
@@ -487,6 +495,12 @@ def build(catalog, backend, api_key=None, settings=None):
     ) -> CallToolResult:
         """Start here for a fast cited answer: combine related terms in one regex with |.
 
+        Include relevant filters in the first call. For fast calendar year Y, start with sent_after
+        December 1 of Y-1 and sent_before January 1 of Y+1, not the entire preceding year.
+        Disclose these bounds; widen for specific gaps/conflicts. For exhaustive event-year
+        coverage, use broader/unbounded header dates to find earlier bookings and later notices.
+        Start with the default byte budget.
+        Coverage is included, so no preliminary index_status call or other search schema is needed.
         Search active committed cached text locally, case-insensitive with multiline anchors.
         Returns matching passages and surrounding nonblank lines (context default 2), compact
         metadata, citations, extraction warnings and coverage. Default max_bytes=16000 (4000–
