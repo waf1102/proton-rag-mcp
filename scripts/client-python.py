@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import sys
+import re
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -33,6 +34,7 @@ async def run():
                 "index_status",
                 "read_mail",
                 "read_mail_batch",
+                "grep_mail",
             ]
             result = await client.call_tool(
                 "search_mail",
@@ -44,6 +46,20 @@ async def run():
                 assert "Tuesday" in result.content[0].text
             assert "imap:///" in result.content[0].text
             hit = json.loads(result.content[0].text)["sources"][0]
+            evidence = await client.call_tool(
+                "grep_mail",
+                {
+                    "pattern": re.escape(hit["text"][:32])
+                    if os.environ.get("RAG_INTEROP_QUERY")
+                    else "ABC123",
+                    "message_ids": [hit["message_id"]],
+                    "max_bytes": 4000,
+                },
+            )
+            assert not evidence.isError
+            assert evidence.structuredContent == json.loads(evidence.content[0].text)
+            assert len(evidence.content[0].text.encode()) <= 4000
+            assert json.loads(evidence.content[0].text)["sources"][0]["citation"] == hit["citation"]
             batch = await client.call_tool(
                 "read_mail_batch",
                 {

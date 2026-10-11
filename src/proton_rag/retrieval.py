@@ -59,6 +59,7 @@ class Snapshot:
     exact: bool
     size: int
     previews: dict[str, str]
+    payload: object = None
 
 
 class Pages:
@@ -79,10 +80,19 @@ class Pages:
             if self.clock() - s.created >= self.ttl:
                 del self.sessions[identity]
 
-    def create(self, signature, keys, exact, previews=None):
+    def create(self, signature, keys, exact, previews=None, *, payload=None):
         self.expire()
         previews = {key: value[:300] for key, value in (previews or {}).items() if key in keys}
-        size = sum(len(k.encode()) for k in keys) + sum(len(v.encode()) for v in previews.values())
+        size = (
+            sum(len(k.encode()) for k in keys)
+            + sum(len(v.encode()) for v in previews.values())
+            # Conservative allowance for decoded Unicode, dictionaries and list objects.
+            + (
+                8 * wire_size(payload) + len(signature.encode()) + 128 * len(keys)
+                if payload is not None
+                else 0
+            )
+        )
         if size > self.max_bytes:
             raise ValueError("Search snapshot exceeds memory limit; narrow the filters")
         while self.sessions and (
@@ -91,7 +101,7 @@ class Pages:
         ):
             self.sessions.popitem(last=False)
         snapshot = Snapshot(
-            secrets.token_hex(12), signature, keys, self.clock(), exact, size, previews
+            secrets.token_hex(12), signature, keys, self.clock(), exact, size, previews, payload
         )
         self.sessions[snapshot.identity] = snapshot
         return snapshot

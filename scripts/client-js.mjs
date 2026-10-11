@@ -13,7 +13,7 @@ const transport = new StdioClientTransport({
 try {
   await client.connect(transport);
   const {tools} = await client.listTools();
-  assert.deepEqual(tools.map(t => t.name), ['search_mail', 'index_status', 'read_mail', 'read_mail_batch']);
+  assert.deepEqual(tools.map(t => t.name), ['search_mail', 'index_status', 'read_mail', 'read_mail_batch', 'grep_mail']);
   assert.equal(tools[0].annotations.readOnlyHint, true);
   const result = await client.callTool({name: 'search_mail', arguments: {query: process.env.RAG_INTEROP_QUERY || 'When does cobalt arrive?'}});
   assert.equal(result.isError, false);
@@ -21,6 +21,13 @@ try {
   if (!process.env.RAG_INTEROP_QUERY) assert.match(JSON.stringify(result), /Tuesday/);
   assert.match(JSON.stringify(result), /imap:\/\/\//);
   const hit = JSON.parse(result.content[0].text).sources[0];
+  const evidencePattern = live ? hit.text.slice(0, 32).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : 'ABC123';
+  const evidence = await client.callTool({name: 'grep_mail', arguments: {pattern: evidencePattern, message_ids: [hit.message_id], max_bytes: 4000}});
+  assert.equal(evidence.isError, false);
+  assert.deepEqual(evidence.structuredContent, JSON.parse(evidence.content[0].text));
+  assert.ok(Buffer.byteLength(evidence.content[0].text, 'utf8') <= 4000);
+  assert.equal(JSON.parse(evidence.content[0].text).sources[0].citation, hit.citation);
+  if (!live) assert.match(evidence.content[0].text, /ABC123/);
   const full = await client.callTool({name: 'read_mail', arguments: {message_id: hit.message_id, offset: live ? 0 : 20000}});
   assert.equal(full.isError, false);
   if (!live) assert.match(JSON.stringify(full), /ABC123/);

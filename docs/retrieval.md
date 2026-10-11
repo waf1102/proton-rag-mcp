@@ -1,6 +1,22 @@
 # Finding and reading your mail
 
-Use `search_mail` to discover messages, then `read_mail` or `read_mail_batch` to extract information from full text. Search previews are short; an itinerary's flight numbers or a receipt's totals may be elsewhere in the email.
+Start with `grep_mail` for a fast cited answer. Combine related terms in one regex, use the returned coverage, and answer when its passages support the requested facts. Make another call only for a specific missing fact or conflict, reusing examined message IDs. Reserve exhaustive enumeration for explicit requests and otherwise disclose the limits of the displayed evidence.
+
+## Evidence passages
+
+```json
+{"pattern": "invoice|total|paid", "context": 2}
+```
+
+The case-insensitive multiline regex searches original cached extracted text from active, committed messages. It returns matching passages with surrounding nonblank lines, merged overlapping windows, compact subject/sender/header date, stable citations, and extraction warnings. Matches in subject/sender bring a message ahead of incidental body mentions while retaining every matching message. Display whitespace is compacted; full original text and character offsets remain available through `read_mail`. Long lines are centered around matches and mark `context_clipped`; separate repeated passages remain visible so conflicting revisions can be distinguished.
+
+`context` accepts 0–10 surrounding nonblank lines (default 2). `max_bytes` accepts 4,000–32,000 serialized UTF-8 bytes (default 16,000). A client may save large results to a generated-output file; reading that file once can replace multiple small retrieval calls. Optional `message_ids` accepts up to 100 canonical IDs, legacy aliases or citations. The existing sender/subject/folder/header-date filters also apply.
+
+`search_complete` means the bounded regex scan finished over the snapshot's eligible cached text. `searched_messages`, `unavailable_messages`, and `matched_messages` describe that scan; `displayed_messages` describes this page. `has_more` and a cursor-only `next_call` identify undisplayed evidence. Follow every page for an exhaustive request. Cursors expire after ten minutes, restart or bounded-cache eviction. Activity, commit status and filters are rechecked on continuation; deletions can reduce displayed counts, and new mail requires a new search.
+
+Regex execution is limited to 100 ms per message, the scan to ten seconds, each body to eight million characters, and snapshots to 16 sessions/64 MiB estimated memory. Invalid patterns or exceeded limits return actionable errors without claiming completeness. Narrow the pattern, filters or message IDs on those errors. Skipped attachments, unavailable text and unindexed mail remain outside the evidence. Email header dates are not event dates: an itinerary booked in December may concern January travel. Reservations and standby listings do not establish confirmed travel.
+
+Use `search_mail` for semantic discovery or FTS5 enumeration when appropriate. Read full messages only when passages are insufficient or exact formatting matters.
 
 ## Search modes
 
@@ -44,7 +60,7 @@ Or specify offsets and lengths:
 {"requests": [{"message_id": "<first ID>", "length": 2000}, {"message_id": "<second ID>", "offset": 0}]}
 ```
 
-Its `messages` are associated with the original input through `request_index`, including on cursor continuations. Each successful item has full metadata, extraction flags and its own continuation offset. When text remains, execute the returned `next_call` with its cursor to read the unfinished messages; finished items are omitted from the next batch. Alternatively, construct `requests` using each `next_offset`. Supply one of `message_ids`, `requests`, or `cursor` per call. The combined response is bounded below 4 KB, so actual pages may be shorter. Cite the returned `citation` for extracted facts. Text is never whitespace-normalized, and offsets continue to refer to the original cached Unicode text. Retry individual errors separately; if metadata exceeds the batch budget, use `read_mail`.
+Its `messages` are associated with the original input through `request_index`, including on cursor continuations. Each successful item has full metadata, extraction flags and its own continuation offset. When text remains, execute the returned `next_call` with its cursor to read the unfinished messages; finished items are omitted from the next batch. Alternatively, construct `requests` using each `next_offset`. Supply one of `message_ids`, `requests`, or `cursor` per call. The combined response is bounded below 4 KB. It allocates space to messages dynamically and queues messages that would otherwise receive fewer than 100 characters (unless fewer remain). A message whose metadata cannot fit alone returns an explicit `read_mail` fallback. Cite the returned `citation` for extracted facts. Text is never whitespace-normalized, and offsets continue to refer to the original cached Unicode text. Retry individual errors separately; if metadata exceeds the batch budget, use `read_mail`.
 
 ## Existing installations
 
@@ -55,3 +71,14 @@ uv run proton-rag-lexical
 ```
 
 Resume ingestion and reconnect MCP clients afterward. `index_status` reports `lexical_ready` and `lexical_messages`; exact mode remains unavailable until the backfill verifies and publishes readiness. Interrupted backfills resume on rerun. Consult the installation's [maintenance instructions](operations.md#backups-and-restore-verification) for backup and service commands.
+
+## Measuring a candidate
+
+The independent scanner can be measured without MCP or a model. Use a frozen catalog copy and avoid writing private evidence to this repository:
+
+```bash
+.venv/bin/python scripts/benchmark-evidence.py --catalog /private/snapshot.db \
+  --pattern 'invoice|total|paid' --repeats 3 --all-pages
+```
+
+These are local tool timings. End-to-end acceptance additionally requires fresh Gemini Pro High sessions, identical snapshots/instructions for MCP and direct `rg` plus reads, and transcript audits counting schema/generated-output reads. Record final-answer completion, every tool call, payload bytes, supported facts/citations and remaining coverage. Empty timeout responses are failures. See [candidate validation](mail-evidence-validation.md) for the current results and pending gates.
