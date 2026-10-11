@@ -1,5 +1,7 @@
 """Bounded query snapshots and compact MCP pages; no cloud retrieval."""
 
+import asyncio
+from itertools import zip_longest
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -168,3 +170,10 @@ def coverage_summary(catalog):
             "indexed_date_range",
         ]
     }
+
+
+async def search_variants(backend, queries, limit, **kwargs):
+    """Bounded paraphrases share filters; interleave ranks before canonical deduplication."""
+    queries = list(dict.fromkeys(q.strip() for q in queries))
+    ranked = await asyncio.gather(*(backend.search(q, limit, **kwargs) for q in queries))
+    return [hit for row in zip_longest(*ranked) for hit in row if hit is not None]

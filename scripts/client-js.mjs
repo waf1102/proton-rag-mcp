@@ -13,7 +13,7 @@ const transport = new StdioClientTransport({
 try {
   await client.connect(transport);
   const {tools} = await client.listTools();
-  assert.deepEqual(tools.map(t => t.name), ['search_mail', 'index_status', 'read_mail', 'read_mail_batch', 'grep_mail']);
+  assert.deepEqual(tools.map(t => t.name), ['search_mail', 'index_status', 'read_mail', 'read_mail_batch', 'related_mail', 'grep_mail']);
   assert.equal(tools[0].annotations.readOnlyHint, true);
   const result = await client.callTool({name: 'search_mail', arguments: {query: process.env.RAG_INTEROP_QUERY || 'When does cobalt arrive?'}});
   assert.equal(result.isError, false);
@@ -21,6 +21,18 @@ try {
   if (!process.env.RAG_INTEROP_QUERY) assert.match(JSON.stringify(result), /Tuesday/);
   assert.match(JSON.stringify(result), /imap:\/\/\//);
   const hit = JSON.parse(result.content[0].text).sources[0];
+  if (!live) {
+    const related = await client.callTool({name: 'related_mail', arguments: {message_id: hit.message_id}});
+    assert.equal(related.isError, false);
+    const relatedPage = JSON.parse(related.content[0].text);
+    assert.deepEqual(related.structuredContent, relatedPage);
+    assert.equal(relatedPage.sources[0].citation, hit.citation);
+    assert.equal(relatedPage.sources[0].display_truncated, true);
+    assert.equal(relatedPage.exhaustive, false);
+    const larger = await client.callTool({name: 'search_mail', arguments: {query: 'When does cobalt arrive?', max_bytes: 16000}});
+    assert.equal(larger.isError, false);
+    assert.equal(JSON.parse(larger.content[0].text).sources[0].text, 'Cobalt arrives Tuesday.');
+  }
   const full = await client.callTool({name: 'read_mail', arguments: {message_id: hit.message_id, offset: live ? 0 : 20000}});
   assert.equal(full.isError, false);
   if (!live) assert.match(JSON.stringify(full), /ABC123/);

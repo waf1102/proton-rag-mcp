@@ -22,7 +22,19 @@ class Backend:
 
 with TemporaryDirectory() as state:
     catalog = Catalog(Path(state) / "catalog.db")
-    catalog.intent("fixture", "INBOX", "1", "7", "abc", True, {})
+    catalog.intent(
+        "fixture",
+        "INBOX",
+        "1",
+        "7",
+        "abc",
+        True,
+        {
+            "subject": "Cobalt arrival",
+            "sender": "peer@example.test",
+            "recipients": "me@example.test",
+        },
+    )
     catalog.activate("fixture", [])
     catalog.store_text(
         "fixture",

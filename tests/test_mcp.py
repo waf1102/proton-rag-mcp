@@ -23,6 +23,7 @@ async def test_python_sdk_client():
                 "index_status",
                 "read_mail",
                 "read_mail_batch",
+                "related_mail",
                 "grep_mail",
             ]
             assert tools[0].annotations.readOnlyHint
@@ -37,6 +38,21 @@ async def test_python_sdk_client():
             assert evidence.structuredContent == json.loads(evidence.content[0].text)
             assert "ABC123" in evidence.content[0].text
             assert json.loads(evidence.content[0].text)["sources"][0]["citation"] == hit["citation"]
+            related = await client.call_tool("related_mail", {"message_id": hit["message_id"]})
+            assert not related.isError
+            related_page = json.loads(related.content[0].text)
+            assert related.structuredContent == related_page
+            assert related_page["sources"][0]["citation"] == hit["citation"]
+            assert related_page["sources"][0]["display_truncated"]
+            assert related_page["exhaustive"] is False
+            larger = await client.call_tool(
+                "search_mail", {"query": "When does cobalt arrive?", "max_bytes": 16000}
+            )
+            assert not larger.isError
+            assert (
+                json.loads(larger.content[0].text)["sources"][0]["text"]
+                == "Cobalt arrives Tuesday."
+            )
             full = await client.call_tool(
                 "read_mail", {"message_id": hit["message_id"], "offset": 20000}
             )
@@ -149,6 +165,7 @@ async def test_answer_tool_available_with_key_without_ledger():
         "index_status",
         "read_mail",
         "read_mail_batch",
+        "related_mail",
         "grep_mail",
         "answer_mail",
     }

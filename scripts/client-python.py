@@ -34,6 +34,7 @@ async def run():
                 "index_status",
                 "read_mail",
                 "read_mail_batch",
+                "related_mail",
                 "grep_mail",
             ]
             result = await client.call_tool(

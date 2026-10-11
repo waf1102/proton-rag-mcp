@@ -39,6 +39,67 @@ class Ranked:
         return [{"text": self.text, "metadata": {"docSource": key}} for key in self.keys[:limit]]
 
 
+async def test_hybrid_keeps_winning_passage_instead_of_header_keyword(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    passage = "We cannot book your journey this month. Please contact your scheduler for new dates."
+    keys = seed(catalog, text="subject: Trip request\n\n" + "Layout \n" * 1000 + passage)
+    server = build(catalog, Ranked(keys, text=passage))
+    result = await call(server, "search_mail", {"query": "trip postponed"})
+    assert passage in result["sources"][0]["text"]
+
+
+async def test_larger_hybrid_response_contains_evidence_and_preserves_budget_on_resume(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    passage = "日本語 🦊 " + "Useful evidence. " * 70
+    keys = seed(catalog, 12, text=passage)
+    server = build(catalog, Ranked(keys, text=passage))
+    result = await call(
+        server, "search_mail", {"query": "meaning", "limit": 12, "max_bytes": 16000}
+    )
+    assert len(result["sources"]) >= 6
+    assert len(result["sources"][0]["text"]) > 300
+    assert wire_size(result) <= 16000
+    recovered = [h["message_id"] for h in result["sources"]]
+    while result["has_more"]:
+        result = await call(server, "search_mail", result["next_call"]["arguments"])
+        assert wire_size(result) <= 16000
+        recovered.extend(h["message_id"] for h in result["sources"])
+    assert recovered == keys
+
+
+async def test_correspondence_scope_filters_before_ranking_and_discloses_exclusions(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    keys = seed(catalog, 3)
+    with catalog.connect() as db:
+        for key, subject in zip(
+            keys, ["Newsletter", " Re: Receipt adjustment", "Original request"]
+        ):
+            md = json.loads(
+                db.execute("SELECT metadata FROM messages WHERE key=?", (key,)).fetchone()[0]
+            )
+            md["subject"] = subject
+            db.execute("UPDATE messages SET metadata=? WHERE key=?", (json.dumps(md), key))
+        db.execute("UPDATE documents SET folder='Sent' WHERE message_key=?", (keys[2],))
+
+    class Filtered(Ranked):
+        async def search(self, query, limit, **kwargs):
+            return [
+                {"text": "Useful reply", "metadata": {"docSource": key}}
+                for key in kwargs["message_ids"]
+            ]
+
+    result = await call(
+        build(catalog, Filtered(keys)),
+        "search_mail",
+        {"query": "a corrected receipt", "correspondence_only": True},
+    )
+    assert {h["message_id"] for h in result["sources"]} == set(keys[1:])
+    assert (
+        result["retrieval_scope"]
+        == "Reply/forward subjects or Sent membership; other mail excluded."
+    )
+
+
 async def test_search_and_status_do_not_load_all_memberships(tmp_path, monkeypatch):
     catalog = Catalog(tmp_path / "catalog.db")
     keys = seed(catalog)
@@ -502,3 +563,76 @@ async def test_exact_ranks_direct_evidence_before_incidental_long_mail(tmp_path)
     result = await call(server, "search_mail", result["next_call"]["arguments"])
     assert result["sources"][0]["message_id"] == keys[0]
     assert result["has_more"] is False
+
+
+async def test_larger_search_budget_fits_unicode_passage_instead_of_metadata_error(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    text = "日本語 " * 500
+    keys = seed(catalog, text=text)
+    server = build(catalog, Ranked(keys, text=text))
+    result = await call(server, "search_mail", {"query": "meaning", "max_bytes": 4000})
+    assert result["sources"][0]["text"]
+    assert result["sources"][0]["passage_clipped"] is True
+    assert wire_size(result) <= 4000
+
+
+async def test_hybrid_alternatives_share_filters_and_interleave_unique_evidence(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    keys = seed(catalog, 4)
+    requested = []
+
+    class Variants:
+        async def search(self, query, limit, **kwargs):
+            requested.append((query, kwargs))
+            selected = {
+                "receipt corrected": keys[:2],
+                "updated invoice": keys[1:3],
+                "charges revised": keys[3:],
+            }[query]
+            return [{"text": query, "metadata": {"docSource": k}} for k in selected]
+
+    result = await call(
+        build(catalog, Variants()),
+        "search_mail",
+        {
+            "query": "receipt corrected",
+            "alternate_queries": ["updated invoice", "charges revised"],
+            "subject": "Itinerary",
+            "max_bytes": 16000,
+        },
+    )
+    assert {q for q, _ in requested} == {"receipt corrected", "updated invoice", "charges revised"}
+    assert all(set(kw["message_ids"]) == set(keys) for _, kw in requested)
+    assert [h["message_id"] for h in result["sources"]] == [keys[0], keys[1], keys[3], keys[2]]
+    assert result["sources"][1]["text"] == "updated invoice"
+    assert result["exhaustive"] is False
+
+
+async def test_exact_rejects_semantic_alternatives(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    seed(catalog)
+    with pytest.raises(Exception, match="hybrid"):
+        await call(
+            build(catalog, object()),
+            "search_mail",
+            {"query": "receipt", "mode": "exact", "alternate_queries": ["invoice"]},
+        )
+
+
+async def test_hybrid_alternatives_cursor_preserves_queries_and_rejects_changes(tmp_path):
+    catalog = Catalog(tmp_path / "catalog.db")
+    keys = seed(catalog, 10)
+    server = build(catalog, Ranked(keys, text="日本語 " * 400))
+    result = await call(
+        server,
+        "search_mail",
+        {"query": "receipt", "alternate_queries": ["invoice"], "max_bytes": 4000},
+    )
+    assert result["has_more"]
+    with pytest.raises(Exception, match="changed"):
+        await call(
+            server, "search_mail", {"cursor": result["next_cursor"], "alternate_queries": []}
+        )
+    following = await call(server, "search_mail", result["next_call"]["arguments"])
+    assert wire_size(following) <= 4000
+    assert following["sources"][0]["message_id"] == keys[1]
