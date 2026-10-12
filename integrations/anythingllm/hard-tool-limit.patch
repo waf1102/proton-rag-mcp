@@ -1,0 +1,194 @@
+--- a/utils/agents/aibitat/index.js
++++ b/utils/agents/aibitat/index.js
+@@ -1044,8 +1044,21 @@
+       await this.#reportModelLoading();
+     }
+ 
++    // Hard per-turn dispatch boundary, including providers that return unadvertised calls.
++    const finalOnly = depth >= this.maxToolCalls;
++    if (finalOnly) {
++      functions = [];
++      messages = [
++        ...messages,
++        {
++          role: "user",
++          content: "The tool-call budget for this turn is exhausted. Answer now using only the examined evidence. Include the complete returned citation links for supported facts and disclose coverage limits. If verification is insufficient, say inconclusive or unknown; do not claim that no other examples or confirmations exist. Do not request or call more tools.",
++        },
++      ];
++    }
++
+     /** @type {{ functionCall: { name: string, arguments: string }, textResponse: string }} */
+-    const completionStream = await this.#safeProviderCall(() =>
++    let completionStream = await this.#safeProviderCall(() =>
+       this.providerInstance.stream(messages, functions, eventHandler)
+     );
+ 
+@@ -1053,20 +1066,27 @@
+     // which can include a truncated tool call - never act on it.
+     if (this._aborted) return null;
+ 
++    if (
++      finalOnly &&
++      (completionStream.functionCall ||
++        !completionStream.textResponse?.replace(/<think>[\s\S]*?<\/think>/g, "").trim())
++    ) {
++      completionStream = {
++        ...completionStream,
++        uuid: completionStream?.uuid || v4(),
++        functionCall: null,
++        textResponse: "I could not complete a supported answer within the tool-call limit. The evidence examined is inconclusive; this does not establish that no examples or confirmations exist. Ask for a focused follow-up or explicitly request a larger investigation budget.",
++      };
++      eventHandler("reportStreamEvent", {
++        type: "fullTextResponse",
++        uuid: completionStream.uuid,
++        content: completionStream.textResponse,
++      });
++    }
++
+     if (completionStream.functionCall) {
+       const { name, arguments: args } = completionStream.functionCall;
+       const fn = this.functions.get(name);
+-      const reachedToolLimit = depth >= this.maxToolCalls;
+-
+-      if (reachedToolLimit) {
+-        this.handlerProps?.log?.(
+-          `[warning]: Maximum tool call limit (${this.maxToolCalls}) reached. Executing final tool call then generating response.`
+-        );
+-        this?.introspect?.(
+-          `Maximum tool call limit (${this.maxToolCalls}) reached. After this tool I will generate a final response.`
+-        );
+-      }
+-
+       if (!fn) {
+         return await this.handleAsyncExecution(
+           [
+@@ -1078,7 +1098,7 @@
+               originalFunctionCall: completionStream.functionCall,
+             },
+           ],
+-          reachedToolLimit ? [] : functions,
++          functions,
+           byAgent,
+           depth + 1
+         );
+@@ -1159,7 +1179,7 @@
+ 
+       return await this.handleAsyncExecution(
+         newMessages,
+-        reachedToolLimit ? [] : functions,
++        functions,
+         byAgent,
+         depth + 1
+       );
+@@ -1211,8 +1231,21 @@
+       await this.#reportModelLoading();
+     }
+ 
++    // Hard per-turn dispatch boundary, including providers that return unadvertised calls.
++    const finalOnly = depth >= this.maxToolCalls;
++    if (finalOnly) {
++      functions = [];
++      messages = [
++        ...messages,
++        {
++          role: "user",
++          content: "The tool-call budget for this turn is exhausted. Answer now using only the examined evidence. Include the complete returned citation links for supported facts and disclose coverage limits. If verification is insufficient, say inconclusive or unknown; do not claim that no other examples or confirmations exist. Do not request or call more tools.",
++        },
++      ];
++    }
++
+     // get the chat completion
+-    const completion = await this.#safeProviderCall(() =>
++    let completion = await this.#safeProviderCall(() =>
+       this.providerInstance.complete(messages, functions)
+     );
+ 
+@@ -1220,20 +1253,21 @@
+     // which can include a truncated tool call - never act on it.
+     if (this._aborted) return null;
+ 
++    if (
++      finalOnly &&
++      (completion.functionCall ||
++        !completion.textResponse?.replace(/<think>[\s\S]*?<\/think>/g, "").trim())
++    ) {
++      completion = {
++        ...completion,
++        functionCall: null,
++        textResponse: "I could not complete a supported answer within the tool-call limit. The evidence examined is inconclusive; this does not establish that no examples or confirmations exist. Ask for a focused follow-up or explicitly request a larger investigation budget.",
++      };
++    }
++
+     if (completion.functionCall) {
+       const { name, arguments: args } = completion.functionCall;
+       const fn = this.functions.get(name);
+-      const reachedToolLimit = depth >= this.maxToolCalls;
+-
+-      if (reachedToolLimit) {
+-        this.handlerProps?.log?.(
+-          `[warning]: Maximum tool call limit (${this.maxToolCalls}) reached. Executing final tool call then generating response.`
+-        );
+-        this?.introspect?.(
+-          `Maximum tool call limit (${this.maxToolCalls}) reached. After this tool I will generate a final response.`
+-        );
+-      }
+-
+       if (!fn) {
+         return await this.handleExecution(
+           [
+@@ -1245,7 +1279,7 @@
+               originalFunctionCall: completion.functionCall,
+             },
+           ],
+-          reachedToolLimit ? [] : functions,
++          functions,
+           byAgent,
+           depth + 1,
+           msgUUID
+@@ -1314,7 +1348,7 @@
+ 
+       return await this.handleExecution(
+         newMessages,
+-        reachedToolLimit ? [] : functions,
++        functions,
+         byAgent,
+         depth + 1,
+         msgUUID
+--- a/utils/agents/aibitat/providers/helpers/tooled.js
++++ b/utils/agents/aibitat/providers/helpers/tooled.js
+@@ -253,7 +253,7 @@
+     messages: formattedMessages,
+     ...maxTokensParam(maxTokens, maxTokensKey),
+     ...serviceTierParam(serviceTier, provider?.providerLog?.bind(provider)),
+-    ...(tools.length > 0 ? { tools } : {}),
++    ...(tools.length > 0 ? { tools } : { tool_choice: "none" }),
+     ...(provider?.reasoningConfig ?? {}),
+   });
+ 
+@@ -434,7 +434,7 @@
+     messages: formattedMessages,
+     ...maxTokensParam(maxTokens, maxTokensKey),
+     ...serviceTierParam(serviceTier, provider?.providerLog?.bind(provider)),
+-    ...(tools.length > 0 ? { tools } : {}),
++    ...(tools.length > 0 ? { tools } : { tool_choice: "none" }),
+     ...(provider?.reasoningConfig ?? {}),
+   });
+ 
+@@ -453,7 +453,7 @@
+     const toolCall = completion.tool_calls[0];
+     const functionArgs = safeJsonParse(toolCall.function.arguments, null);
+ 
+-    if (functionArgs === null) {
++    if (functionArgs === null && tools.length > 0) {
+       return {
+         textResponse: null,
+         retryWithError: {
+@@ -490,7 +490,7 @@
+   }
+ 
+   const reasoning = extractReasoningContent(completion);
+-  let textResponse = completion.content;
++  let textResponse = completion.content ?? "";
+   if (reasoning && reasoning.trim().length > 0) {
+     textResponse = `<think>${reasoning}</think>${textResponse}`;
+   }
